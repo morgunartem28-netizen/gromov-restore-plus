@@ -104,15 +104,34 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["muted"],
         ).pack(anchor="w", pady=(4, 0))
 
+        header_actions = ctk.CTkFrame(header, fg_color="transparent")
+        header_actions.grid(row=0, column=2, rowspan=2, padx=(0, 20), pady=16, sticky="e")
+
+        ctk.CTkLabel(
+            header_actions,
+            text=f"v{APP_VERSION}",
+            font=ui_font(12),
+            text_color=THEME["muted"],
+        ).pack(side="left", padx=(0, 10))
+
+        secondary_button(
+            header_actions,
+            text="Обновить",
+            width=108,
+            height=42,
+            font=ui_font(13, weight="bold"),
+            command=self._check_updates,
+        ).pack(side="left", padx=(0, 8))
+
         primary_button(
-            header,
+            header_actions,
             text="?",
             width=42,
             height=42,
             corner_radius=21,
             font=ui_font(20, weight="bold"),
             command=self._show_help,
-        ).grid(row=0, column=2, rowspan=2, padx=(0, 20), pady=16, sticky="e")
+        ).pack(side="left")
 
         sidebar = glass_frame(self, width=290)
         sidebar.grid(row=1, column=0, sticky="nsw", padx=(16, 8), pady=12)
@@ -148,16 +167,6 @@ class RestoreIosApp(ctk.CTk):
 
         self._action_button(sidebar, "Проверить iPhone", self._check_device).pack(fill="x", padx=14, pady=4)
         self._action_button(sidebar, "Установить драйверы Apple", self._install_drivers, secondary=True).pack(
-            fill="x", padx=14, pady=4
-        )
-
-        self._section_label(sidebar, "Обновление", top_pad=20)
-        ctk.CTkLabel(
-            sidebar,
-            text=f"Версия {APP_VERSION}",
-            text_color=THEME["muted"],
-        ).pack(anchor="w", padx=16, pady=(0, 8))
-        self._action_button(sidebar, "Проверить обновления", self._check_updates, secondary=True).pack(
             fill="x", padx=14, pady=4
         )
 
