@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "id": "vk",
+      "title": "ВКонтакте",
+      "bundleId": "com.vk.vkclient",
+      "appId": 564177498,
+      "description": "Официальное приложение VK. Доступно для установки, если ранее скачивали из App Store.",
+      "iconUrl": "",
+      "iconFile": "vk.png"
+    },
+    {
+      "id": "avito",
+      "title": "Авито",
+      "bundleId": "ru.avito.app",
+      "appId": 417281773,
+      "description": "Официальное приложение Авито. Нужна лицензия в вашем Apple ID.",
+      "iconUrl": ""
+    },
+    {
+      "id": "mailru",
+      "title": "Почта Mail.ru",
+      "bundleId": "ru.mail.mailapp",
+      "appId": 511310430,
+      "description": "Официальная почта Mail.ru.",
+      "iconUrl": ""
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "id": "vk",
+      "title": "ВКонтакте",
+      "bundleId": "com.vk.vkclient",
+      "appId": 564177498,
+      "description": "Официальное приложение VK",
+      "iconUrl": "",
+      "iconFile": "vk.png"
+    },
+    {
+      "id": "max",
+      "title": "MAX",
+      "bundleId": "ru.oneme.app",
+      "appId": 6739530834,
+      "description": "Мессенджер MAX (max.ru)",
+      "iconUrl": "https://max.ru/s/img/big-logo.png",
+      "iconFile": "max.png"
+    },
+    {
+      "id": "avito",
+      "title": "Авито",
+      "bundleId": "ru.avito.app",
+      "appId": 417281773,
+      "description": "Официальное приложение Авито",
+      "iconUrl": "",
+      "iconFile": "avito.png"
+    },
+    {
+      "id": "mailru",
+      "title": "Почта Mail.ru",
+      "bundleId": "ru.mail.mailapp",
+      "appId": 511310430,
+      "description": "Официальная почта Mail.ru",
+      "iconUrl": "",
+      "iconFile": "mailru.png"
+    }
+  ]
+}

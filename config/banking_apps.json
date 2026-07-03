@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "category": "Банковские приложения",
+  "apps": [
+    {
+      "id": "sber-family-online",
+      "title": "Сбербанк",
+      "bankGroup": "sber",
+      "bundleId": "",
+      "appId": 6769745089,
+      "maskTitle": "Семейный Онлайн",
+      "released": "2026-06-23",
+      "removed": "2026-06-24",
+      "description": "СберБанк Онлайн"
+    },
+    {
+      "id": "tbank-toastmas",
+      "title": "Т-Банк",
+      "bankGroup": "tbank",
+      "bundleId": "",
+      "appId": 6774629936,
+      "maskTitle": "Toastmas",
+      "released": "2026-06-23",
+      "description": "Т-Банк"
+    },
+    {
+      "id": "tbank-drive-transit",
+      "title": "Т-Банк",
+      "bankGroup": "tbank",
+      "bundleId": "",
+      "appId": 6760469916,
+      "maskTitle": "Drive Transit",
+      "released": "2026-04-01",
+      "removed": "2026-04-21",
+      "description": "Т-Банк"
+    },
+    {
+      "id": "vtb-sirius",
+      "title": "ВТБ",
+      "bankGroup": "vtb",
+      "bundleId": "",
+      "appId": 6749962031,
+      "maskTitle": "Сириус",
+      "released": "2026-06-05",
+      "description": "ВТБ Онлайн"
+    },
+    {
+      "id": "alfa-apgreyd",
+      "title": "Альфа-Банк",
+      "bankGroup": "alfa",
+      "bundleId": "",
+      "appId": 6774584229,
+      "maskTitle": "Апгрейд — Умный Помощник",
+      "released": "2026-06-17",
+      "description": "Альфа-Банк"
+    },
+    {
+      "id": "alfa-holder",
+      "title": "Альфа-Банк",
+      "bankGroup": "alfa",
+      "bundleId": "",
+      "appId": 6764576497,
+      "maskTitle": "Холдер",
+      "released": "2026-05-01",
+      "description": "Альфа-Банк"
+    },
+    {
+      "id": "sovcom-skb",
+      "title": "Совкомбанк",
+      "bankGroup": "sovcom",
+      "bundleId": "",
+      "appId": 6760401373,
+      "maskTitle": "СКБ. Скидки. Купоны. Бонусы",
+      "released": "2026-06-30",
+      "removed": "2026-06-30",
+      "description": "Совкомбанк / Халва"
+    },
+    {
+      "id": "sovcom-omp",
+      "title": "Совкомбанк",
+      "bankGroup": "sovcom",
+      "bundleId": "",
+      "appId": 6762749774,
+      "maskTitle": "ОМП — Организация Мероприятий",
+      "released": "2026-05-26",
+      "description": "Совкомбанк / Халва"
+    },
+    {
+      "id": "gpb-digital-safe",
+      "title": "Газпромбанк",
+      "bankGroup": "gazprom",
+      "bundleId": "",
+      "appId": 6755891115,
+      "maskTitle": "Цифровой сейф",
+      "released": "2026-04-13",
+      "description": "Газпромбанк"
+    }
+  ]
+}
