@@ -100,6 +100,8 @@ class ConfigManager:
     _BUNDLE_ID_FIXES: dict[str, str] = {
         # В IPA Авито реальный bundle ID — ru.avito.app.
         "avito": "ru.avito.app",
+        # У Почты Mail.ru (511310430) в IPA bundle ID — ru.mail.mail.
+        "mailru": "ru.mail.mail",
     }
 
     def _migrate_known_app_ids(self) -> None:

@@ -7,6 +7,7 @@ from pathlib import Path
 # Старые bundle ID в каталоге, которые всё ещё относятся к тому же приложению.
 _BUNDLE_EQUIVALENTS: tuple[frozenset[str], ...] = (
     frozenset({"ru.avito.Avito", "ru.avito.app"}),
+    frozenset({"ru.mail.mailapp", "ru.mail.mail"}),
 )
 
 
