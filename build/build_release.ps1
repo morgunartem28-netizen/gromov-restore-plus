@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 
@@ -89,6 +89,63 @@ function Ensure-AppleDrivers {
     Write-Host "Apple drivers: MSI not bundled (installer will use winget / Microsoft Store)"
 }
 
+function Copy-ToolsAndDriversToDist {
+    param(
+        [string]$DistRoot,
+        [string]$ToolsRoot,
+        [string]$DriversRoot
+    )
+    $distTools = Join-Path $DistRoot "tools"
+    $distDrivers = Join-Path $DistRoot "drivers"
+    New-Item -ItemType Directory -Force -Path $distTools, $distDrivers | Out-Null
+
+    foreach ($name in @("ipatool.exe", "ios.exe")) {
+        $src = Join-Path $ToolsRoot $name
+        if (-not (Test-Path $src)) {
+            throw "Missing required tool before packaging: $src (run Ensure-* steps or place binaries in tools\)"
+        }
+        Copy-Item $src (Join-Path $distTools $name) -Force
+        Write-Host "Copied $name -> dist\tools\$name"
+    }
+
+    if (Test-Path $DriversRoot) {
+        Get-ChildItem -Path $DriversRoot -File | ForEach-Object {
+            Copy-Item $_.FullName (Join-Path $distDrivers $_.Name) -Force
+            Write-Host "Copied driver file -> dist\drivers\$($_.Name)"
+        }
+    }
+
+    $bat = Join-Path $distDrivers "install_drivers.bat"
+    if (-not (Test-Path $bat)) {
+        Write-Warning "dist\drivers\install_drivers.bat missing; Inno [Run] will skip driver install (skipifdoesntexist)"
+    }
+}
+
+function Assert-DistBeforeInno {
+    param([string]$DistRoot)
+    $required = @(
+        (Join-Path $DistRoot "GROMOV-RestorePlus.exe"),
+        (Join-Path $DistRoot "tools\ipatool.exe"),
+        (Join-Path $DistRoot "tools\ios.exe")
+    )
+    foreach ($p in $required) {
+        if (-not (Test-Path $p)) {
+            throw "Pre-Inno check failed: $p is missing. Do not run ISCC on PyInstaller output alone — use build\build_release.ps1 or build_release.bat."
+        }
+    }
+    Write-Host ""
+    Write-Host "Pre-Inno dist layout:"
+    Get-ChildItem $DistRoot -Directory | ForEach-Object { Write-Host "  $($_.Name)\" }
+    Get-ChildItem (Join-Path $DistRoot "tools") -File | ForEach-Object { Write-Host "  tools\$($_.Name) ($($_.Length) bytes)" }
+    $drv = Join-Path $DistRoot "drivers"
+    if (Test-Path $drv) {
+        Get-ChildItem $drv -File | ForEach-Object { Write-Host "  drivers\$($_.Name) ($($_.Length) bytes)" }
+    } else {
+        Write-Host "  drivers\ (missing)"
+    }
+    Write-Host ""
+}
+
 Ensure-GoIos
 Ensure-Ipatool
 Ensure-AppleDrivers
@@ -102,12 +159,12 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 & .\.venv\Scripts\pyinstaller.exe --noconfirm --clean build\GROMOV-RestorePlus.spec
 
 $dist = Join-Path $root "dist\GROMOV-RestorePlus"
-Copy-Item -Path (Join-Path $tools "*") -Destination (Join-Path $dist "tools") -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path (Join-Path $dist "tools") | Out-Null
-Copy-Item (Join-Path $tools "ipatool.exe") (Join-Path $dist "tools\ipatool.exe") -Force
-Copy-Item (Join-Path $tools "ios.exe") (Join-Path $dist "tools\ios.exe") -Force
-New-Item -ItemType Directory -Force -Path (Join-Path $dist "drivers") | Out-Null
-Copy-Item (Join-Path $drivers "*") (Join-Path $dist "drivers") -Recurse -Force
+if (-not (Test-Path $dist)) {
+    throw "PyInstaller did not create $dist"
+}
+
+Copy-ToolsAndDriversToDist -DistRoot $dist -ToolsRoot $tools -DriversRoot $drivers
+Assert-DistBeforeInno -DistRoot $dist
 
 $zip = Join-Path $root "dist\GROMOV-RestorePlus-Portable.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
@@ -121,6 +178,7 @@ $iscc = @(
 
 if ($iscc) {
     & $iscc (Join-Path $root "build\installer.iss")
+    if ($LASTEXITCODE -ne 0) { throw "Inno Setup compile failed with exit code $LASTEXITCODE" }
     Write-Host "Installer: dist\GROMOV-RestorePlus-Setup.exe"
 } else {
     Write-Host "Inno Setup not found - portable ZIP created instead."
