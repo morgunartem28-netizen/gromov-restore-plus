@@ -10,6 +10,27 @@ from ipa_utils import bundle_id_matches, cleanup_download_artifacts, is_valid_ip
 
 
 BANKING_CATEGORY = "Банковские приложения"
+BANKS_FOLDER_TITLE = "Банки"
+
+
+@dataclass(frozen=True)
+class BankGroup:
+    id: str
+    title: str
+    color: str
+    letter: str
+
+
+BANK_GROUPS: tuple[BankGroup, ...] = (
+    BankGroup("sber", "Сбербанк", "#21A038", "С"),
+    BankGroup("tbank", "Т-Банк", "#FFDD2D", "T"),
+    BankGroup("alfa", "Альфа-Банк", "#EF3124", "A"),
+    BankGroup("sovcom", "Совкомбанк", "#003791", "С"),
+    BankGroup("gazprom", "Газпромбанк", "#2355D7", "Г"),
+    BankGroup("psb", "ПСБ", "#E35205", "П"),
+    BankGroup("vtb", "ВТБ", "#002882", "В"),
+    BankGroup("mts", "МТС Банк", "#E30611", "M"),
+)
 
 
 @dataclass
@@ -166,6 +187,27 @@ class ConfigManager:
         return ConfigManager.sort_banking_apps(
             [app for app in self.list_apps() if app.is_banking]
         )
+
+    def list_bank_groups(self) -> list[BankGroup]:
+        counts = self.banking_app_counts()
+        return [group for group in BANK_GROUPS if counts.get(group.id, 0) > 0]
+
+    def banking_app_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for app in self.list_banking_apps():
+            if app.bankGroup:
+                counts[app.bankGroup] = counts.get(app.bankGroup, 0) + 1
+        return counts
+
+    def get_bank_group(self, bank_group_id: str) -> BankGroup | None:
+        for group in BANK_GROUPS:
+            if group.id == bank_group_id:
+                return group
+        return None
+
+    def list_banking_apps_for_group(self, bank_group: str) -> list[AppEntry]:
+        apps = [app for app in self.list_banking_apps() if app.bankGroup == bank_group]
+        return ConfigManager.sort_banking_apps(apps)
 
     def list_apps(self) -> list[AppEntry]:
         default_apps = {app.id: app for app in self._read_apps_file(self.default_apps_path)}

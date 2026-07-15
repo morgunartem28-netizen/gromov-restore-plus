@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 import tkinter as tk
@@ -9,15 +10,26 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from app_paths import ensure_app_dirs, install_dir, resource_dir
-from config_manager import BANKING_CATEGORY, AppEntry, ConfigManager
+from app_paths import data_dir, ensure_app_dirs, install_dir, resource_dir
+from config_manager import BANKS_FOLDER_TITLE, AppEntry, BankGroup, ConfigManager
 from device_installer import DeviceInstaller, DeviceInstallerError
 from disk_utils import DiskSpaceError, ensure_download_space
 from driver_installer import DriverInstallerError, apple_drivers_installed, install_apple_drivers
 from icon_loader import IconLoader
 from ipatool_client import IpatoolClient, IpatoolError
 from login_dialog import AppleLoginDialog
-from theme import THEME, glass_frame, primary_button, secondary_button, ui_font
+from theme import CARD_PADX, CARD_PADY, THEME, empty_state, glass_frame, primary_button, secondary_button, skeleton_card, ui_font
+from ui_animations import (
+    AnimationRunner,
+    DURATION_NORMAL,
+    STAGGER_DELAY,
+    SearchDebouncer,
+    animate_progress_to,
+    bind_press_feedback,
+    bind_smooth_hover,
+    fade_in_window,
+    reveal_card,
+)
 from update_checker import UpdateCheckError, check_for_updates
 from version import APP_VERSION
 from window_effects import apply_glass_window
@@ -43,11 +55,18 @@ class RestoreIosApp(ctk.CTk):
         self._icon_refs: list[object] = []
         self._app_rows: dict[str, ctk.CTkFrame] = {}
         self._catalog_view = "root"
+        self._catalog_bank_group: str | None = None
+        self._bank_search_query = ""
+        self._catalog_state_path = data_dir() / "catalog_state.json"
+        self._catalog_anim_token = 0
         self._progress_active = False
         self._progress_anim_id: str | None = None
         self._progress_value = 0.0
+        self._anim = AnimationRunner(self)
+        self._search_debouncer = SearchDebouncer(self, delay_ms=250, callback=self._apply_bank_search)
 
         self._build_layout()
+        self._restore_catalog_state()
         self._refresh_app_list()
         self.after(50, lambda: apply_glass_window(self))
         self.after(200, self._startup_checks)
@@ -204,11 +223,12 @@ class RestoreIosApp(ctk.CTk):
             top_bar,
             text="Скачать и установить",
             command=self._install_selected,
-            width=200,
-            height=42,
-            font=ui_font(13, weight="bold"),
+            width=210,
+            height=44,
+            font=ui_font(14, weight="bold"),
         )
-        self.install_button.grid(row=0, column=2, padx=16, pady=14)
+        self.install_button.grid(row=0, column=2, padx=18, pady=16)
+        bind_press_feedback(self._anim, self.install_button)
 
         catalog_nav = ctk.CTkFrame(main, fg_color="transparent")
         catalog_nav.grid(row=1, column=0, sticky="ew", pady=(0, 6))
@@ -217,7 +237,7 @@ class RestoreIosApp(ctk.CTk):
         self.catalog_back_button = secondary_button(
             catalog_nav,
             text="← Назад",
-            command=self._open_root_catalog,
+            command=self._catalog_back,
             width=110,
             height=32,
         )
@@ -231,6 +251,20 @@ class RestoreIosApp(ctk.CTk):
             anchor="w",
         )
         self.catalog_path_label.grid(row=0, column=1, sticky="w", padx=(10, 0))
+
+        self.bank_search_var = tk.StringVar()
+        self.bank_search_entry = ctk.CTkEntry(
+            catalog_nav,
+            textvariable=self.bank_search_var,
+            placeholder_text="Поиск в банке...",
+            height=32,
+            fg_color=THEME["input"],
+            border_color=THEME["glass_border"],
+            text_color=THEME["silver"],
+        )
+        self.bank_search_entry.grid(row=0, column=2, sticky="e", padx=(10, 0))
+        self.bank_search_entry.grid_remove()
+        self.bank_search_var.trace_add("write", lambda *_: self._search_debouncer.trigger())
 
         self.app_list = ctk.CTkScrollableFrame(main, fg_color="transparent")
         self.app_list.grid(row=2, column=0, sticky="nsew")
@@ -317,7 +351,7 @@ class RestoreIosApp(ctk.CTk):
         self.progress_frame.grid()
         self.progress_label.configure(text=text)
         self._progress_value = max(self._progress_value, min(1.0, value))
-        self.progress_bar.set(self._progress_value)
+        animate_progress_to(self._anim, self.progress_bar, self._progress_value)
 
     def _start_progress_creep(self, text: str, *, cap: float = 0.6, step: float = 0.003) -> None:
         self._stop_progress_creep()
@@ -558,18 +592,233 @@ class RestoreIosApp(ctk.CTk):
 
         self._run_async(task)
 
+    def _load_catalog_state(self) -> dict[str, str]:
+        if not self._catalog_state_path.exists():
+            return {}
+        try:
+            with self._catalog_state_path.open(encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                return {
+                    "view": str(payload.get("view", "root")),
+                    "bankGroup": str(payload.get("bankGroup", "")),
+                }
+        except (OSError, json.JSONDecodeError):
+            pass
+        return {}
+
+    def _save_catalog_state(self) -> None:
+        payload = {
+            "view": self._catalog_view,
+            "bankGroup": self._catalog_bank_group or "",
+        }
+        try:
+            self._catalog_state_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._catalog_state_path.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    def _restore_catalog_state(self) -> None:
+        state = self._load_catalog_state()
+        view = state.get("view", "root")
+        bank_group = state.get("bankGroup", "")
+        if view == "bank" and bank_group and self.config_manager.get_bank_group(bank_group):
+            self._catalog_view = "bank"
+            self._catalog_bank_group = bank_group
+        elif view == "banks":
+            self._catalog_view = "banks"
+            self._catalog_bank_group = None
+        else:
+            self._catalog_view = "root"
+            self._catalog_bank_group = None
+
+    def _catalog_back(self) -> None:
+        if self._catalog_view == "bank":
+            self._open_banks_folder()
+            return
+        if self._catalog_view == "banks":
+            self._open_root_catalog()
+
     def _open_root_catalog(self) -> None:
         self._catalog_view = "root"
+        self._catalog_bank_group = None
+        self._bank_search_query = ""
+        self.bank_search_var.set("")
         if self.selected_app and self.selected_app.is_banking:
             self.selected_app = None
             self.selected_label.configure(text="Выберите приложение")
             self.selected_meta_label.configure(text="Нажмите на карточку в списке ниже")
             self.selected_icon_label.configure(image="")
+        self._save_catalog_state()
         self._refresh_app_list()
 
-    def _open_banking_folder(self) -> None:
-        self._catalog_view = "banking"
+    def _open_banks_folder(self) -> None:
+        self._catalog_view = "banks"
+        self._catalog_bank_group = None
+        self._bank_search_query = ""
+        self.bank_search_var.set("")
+        self._save_catalog_state()
         self._refresh_app_list()
+
+    def _open_bank_group(self, bank_group_id: str) -> None:
+        if not self.config_manager.get_bank_group(bank_group_id):
+            return
+        self._catalog_view = "bank"
+        self._catalog_bank_group = bank_group_id
+        self._bank_search_query = ""
+        self.bank_search_var.set("")
+        self._save_catalog_state()
+        self._refresh_app_list()
+
+    def _apply_bank_search(self) -> None:
+        query = self.bank_search_var.get().strip().lower()
+        if query == self._bank_search_query:
+            return
+        self._bank_search_query = query
+        if self._catalog_view == "bank":
+            self._refresh_app_list()
+
+    def _update_catalog_header(self) -> None:
+        if self._catalog_view == "root":
+            self.catalog_back_button.grid_remove()
+            self.bank_search_entry.grid_remove()
+            self.catalog_path_label.configure(text="Каталог")
+            return
+
+        self.catalog_back_button.grid()
+        if self._catalog_view == "banks":
+            self.bank_search_entry.grid_remove()
+            self.catalog_path_label.configure(text=BANKS_FOLDER_TITLE)
+            return
+
+        group = self.config_manager.get_bank_group(self._catalog_bank_group or "")
+        bank_title = group.title if group else "Банк"
+        self.bank_search_entry.grid()
+        self.catalog_path_label.configure(text=f"{BANKS_FOLDER_TITLE} / {bank_title}")
+
+    def _filter_bank_apps(self, apps: list[AppEntry]) -> list[AppEntry]:
+        query = self._bank_search_query.strip().lower()
+        if not query:
+            return apps
+        filtered: list[AppEntry] = []
+        for app in apps:
+            haystack = " ".join(
+                part
+                for part in (
+                    app.title,
+                    app.maskTitle,
+                    app.description,
+                    str(app.appId),
+                )
+                if part
+            ).lower()
+            if query in haystack:
+                filtered.append(app)
+        return filtered
+
+    def _schedule_card_reveal(self, card: ctk.CTkFrame, index: int, token: int) -> None:
+        delay = index * STAGGER_DELAY
+
+        def start() -> None:
+            if token != self._catalog_anim_token:
+                return
+            reveal_card(
+                self._anim,
+                card,
+                target_fg=THEME["glass"],
+                target_border=THEME["glass_border"],
+                bg_color=THEME["bg"],
+                duration_ms=DURATION_NORMAL,
+            )
+
+        self.after(delay, start)
+
+    def _bind_card_hover(self, card: ctk.CTkFrame, card_id: str) -> None:
+        bind_smooth_hover(
+            self._anim,
+            card,
+            card_id,
+            normal_fg=THEME["glass"],
+            hover_fg=THEME["glass_hover"],
+            normal_border=THEME["glass_border"],
+            hover_border=THEME["glass_border_bright"],
+            is_selected=lambda cid=card_id: bool(self.selected_app and self.selected_app.id == cid),
+        )
+
+    def _refresh_app_list(self) -> None:
+        self._catalog_anim_token += 1
+        token = self._catalog_anim_token
+        self._anim.cancel_all()
+
+        for child in self.app_list.winfo_children():
+            child.destroy()
+        self._app_rows.clear()
+        self._update_catalog_header()
+
+        skeleton_count = 6 if self._catalog_view == "root" else 4
+        for index in range(skeleton_count):
+            row, col = divmod(index, 2)
+            skeleton_card(self.app_list, row=row, col=col)
+
+        def populate() -> None:
+            if token != self._catalog_anim_token:
+                return
+            for child in self.app_list.winfo_children():
+                child.destroy()
+            self._app_rows.clear()
+            self._populate_catalog_cards(token)
+
+        self.after(160, populate)
+
+    def _populate_catalog_cards(self, token: int) -> None:
+        cards: list[ctk.CTkFrame] = []
+
+        if self._catalog_view == "banks":
+            for index, group in enumerate(self.config_manager.list_bank_groups()):
+                count = self.config_manager.banking_app_counts().get(group.id, 0)
+                row, col = divmod(index, 2)
+                cards.append(self._create_bank_card(group, count, row, col))
+        elif self._catalog_view == "bank" and self._catalog_bank_group:
+            apps = self._filter_bank_apps(
+                self.config_manager.list_banking_apps_for_group(self._catalog_bank_group)
+            )
+            if not apps:
+                if self._bank_search_query:
+                    empty_state(
+                        self.app_list,
+                        emoji="🔍",
+                        title="Ничего не найдено",
+                        hint="Попробуйте другой запрос или очистите поле поиска.",
+                    )
+                else:
+                    empty_state(
+                        self.app_list,
+                        emoji="📭",
+                        title="В этом банке пока нет приложений",
+                        hint="Загляните позже — каталог пополняется.",
+                    )
+            else:
+                for index, app in enumerate(apps):
+                    row, col = divmod(index, 2)
+                    cards.append(self._create_app_card(app, row, col))
+        else:
+            items = sorted(
+                self.config_manager.list_general_apps(),
+                key=lambda item: item.title.lower(),
+            )
+            for index, app in enumerate(items):
+                row, col = divmod(index, 2)
+                cards.append(self._create_app_card(app, row, col))
+            row, col = divmod(len(items), 2)
+            bank_count = len(self.config_manager.list_bank_groups())
+            cards.append(self._create_folder_card(BANKS_FOLDER_TITLE, row, col, bank_count))
+
+        for index, card in enumerate(cards):
+            self._schedule_card_reveal(card, index, token)
+
+        if self.selected_app and self.selected_app.id in self._app_rows:
+            self._highlight_card(self.selected_app.id)
 
     def _bind_click(self, widget: tk.Misc, callback: Callable[[], None]) -> None:
         widget.bind("<Button-1>", lambda _e: callback())
@@ -577,60 +826,74 @@ class RestoreIosApp(ctk.CTk):
             for child in widget.winfo_children():
                 self._bind_click(child, callback)
 
-    def _bind_card_hover(self, card: ctk.CTkFrame, card_id: str) -> None:
-        def on_enter(_event: object) -> None:
-            if self.selected_app and self.selected_app.id == card_id:
-                return
-            card.configure(fg_color=THEME["glass_hover"], border_color=THEME["glass_border_bright"])
-
-        def on_leave(_event: object) -> None:
-            if self.selected_app and self.selected_app.id == card_id:
-                return
-            card.configure(fg_color=THEME["glass"], border_color=THEME["glass_border"])
-
-        card.bind("<Enter>", on_enter)
-        card.bind("<Leave>", on_leave)
-
-    def _refresh_app_list(self) -> None:
-        for child in self.app_list.winfo_children():
-            child.destroy()
-        self._app_rows.clear()
-
-        if self._catalog_view == "banking":
-            self.catalog_back_button.grid()
-            self.catalog_path_label.configure(text=BANKING_CATEGORY)
-            items = self.config_manager.list_banking_apps()
-            index = 0
-            for app in items:
-                row, col = divmod(index, 2)
-                self._create_app_card(app, row, col)
-                index += 1
-        else:
-            self.catalog_back_button.grid_remove()
-            self.catalog_path_label.configure(text="Каталог")
-            items = sorted(
-                self.config_manager.list_general_apps(),
-                key=lambda item: item.title.lower(),
-            )
-            index = 0
-            for app in items:
-                row, col = divmod(index, 2)
-                self._create_app_card(app, row, col)
-                index += 1
-            row, col = divmod(index, 2)
-            self._create_folder_card(BANKING_CATEGORY, row, col)
-
-        if self.selected_app and self.selected_app.id in self._app_rows:
-            self._highlight_card(self.selected_app.id)
-
-    def _create_folder_card(self, title: str, row: int, col: int) -> None:
+    def _create_bank_card(self, group: BankGroup, app_count: int, row: int, col: int) -> ctk.CTkFrame:
         card = glass_frame(self.app_list)
-        card.grid(row=row, column=col, sticky="nsew", padx=(0 if col == 0 else 5, 5 if col == 0 else 0), pady=4)
+        card.grid(
+            row=row,
+            column=col,
+            sticky="nsew",
+            padx=(0 if col == 0 else 6, 6 if col == 0 else 0),
+            pady=6,
+        )
+        card.grid_columnconfigure(1, weight=1)
+        card_id = f"__bank_{group.id}__"
+        self._app_rows[card_id] = card
+
+        icon = self.icon_loader.get_bank_group_icon(group, size=44)
+        self._icon_refs.append(icon)
+        ctk.CTkLabel(card, text="", image=icon).grid(row=0, column=0, padx=(CARD_PADX, 12), pady=CARD_PADY)
+
+        text_wrap = ctk.CTkFrame(card, fg_color="transparent")
+        text_wrap.grid(row=0, column=1, sticky="ew", pady=CARD_PADY, padx=(0, CARD_PADX))
+
+        title_row = ctk.CTkFrame(text_wrap, fg_color="transparent")
+        title_row.pack(anchor="w", fill="x")
+
+        ctk.CTkLabel(
+            title_row,
+            text=group.title,
+            font=ui_font(15, weight="bold"),
+            anchor="w",
+            text_color=THEME["silver"],
+        ).pack(side="left")
+
+        count_label = ctk.CTkLabel(
+            title_row,
+            text=str(app_count),
+            width=28,
+            height=22,
+            corner_radius=11,
+            fg_color=THEME["glass_border"],
+            text_color=THEME["muted"],
+            font=ui_font(11, weight="bold"),
+        )
+        count_label.pack(side="left", padx=(8, 0))
+
+        app_word = "приложений"
+        if app_count % 10 == 1 and app_count % 100 != 11:
+            app_word = "приложение"
+        elif app_count % 10 in {2, 3, 4} and app_count % 100 not in {12, 13, 14}:
+            app_word = "приложения"
+        ctk.CTkLabel(
+            text_wrap,
+            text=f"{app_count} {app_word}",
+            font=ui_font(12),
+            text_color=THEME["muted"],
+            anchor="w",
+        ).pack(anchor="w", pady=(2, 0))
+
+        self._bind_click(card, lambda gid=group.id: self._open_bank_group(gid))
+        self._bind_card_hover(card, card_id)
+        return card
+
+    def _create_folder_card(self, title: str, row: int, col: int, bank_count: int = 0) -> ctk.CTkFrame:
+        card = glass_frame(self.app_list)
+        card.grid(row=row, column=col, sticky="nsew", padx=(0 if col == 0 else 6, 6 if col == 0 else 0), pady=6)
         card.grid_columnconfigure(1, weight=1)
         self._app_rows["__banking_folder__"] = card
 
-        icon_wrap = ctk.CTkFrame(card, fg_color=THEME["accent"], corner_radius=12, width=44, height=44)
-        icon_wrap.grid(row=0, column=0, padx=(12, 10), pady=12)
+        icon_wrap = ctk.CTkFrame(card, fg_color=THEME["accent"], corner_radius=14, width=48, height=48)
+        icon_wrap.grid(row=0, column=0, padx=(CARD_PADX, 12), pady=CARD_PADY)
         icon_wrap.grid_propagate(False)
         ctk.CTkLabel(
             icon_wrap,
@@ -640,26 +903,43 @@ class RestoreIosApp(ctk.CTk):
         ).place(relx=0.5, rely=0.5, anchor="center")
 
         text_wrap = ctk.CTkFrame(card, fg_color="transparent")
-        text_wrap.grid(row=0, column=1, sticky="ew", pady=12, padx=(0, 12))
+        text_wrap.grid(row=0, column=1, sticky="ew", pady=CARD_PADY, padx=(0, CARD_PADX))
+
+        title_row = ctk.CTkFrame(text_wrap, fg_color="transparent")
+        title_row.pack(anchor="w", fill="x")
 
         ctk.CTkLabel(
-            text_wrap,
+            title_row,
             text=title,
             font=ui_font(15, weight="bold"),
             anchor="w",
             text_color=THEME["silver"],
-        ).pack(anchor="w")
+        ).pack(side="left")
 
+        if bank_count:
+            ctk.CTkLabel(
+                title_row,
+                text=str(bank_count),
+                width=28,
+                height=22,
+                corner_radius=11,
+                fg_color=THEME["glass_border"],
+                text_color=THEME["muted"],
+                font=ui_font(11, weight="bold"),
+            ).pack(side="left", padx=(8, 0))
+
+        subtitle = f"{bank_count} банков" if bank_count else "Сбер, Т-Банк, ВТБ и другие"
         ctk.CTkLabel(
             text_wrap,
-            text="Сбер, Т-Банк, ВТБ и другие",
+            text=subtitle,
             font=ui_font(12),
             text_color=THEME["muted"],
             anchor="w",
         ).pack(anchor="w", pady=(2, 0))
 
-        self._bind_click(card, self._open_banking_folder)
+        self._bind_click(card, self._open_banks_folder)
         self._bind_card_hover(card, "__banking_folder__")
+        return card
 
     def _install_drivers(self) -> None:
         if apple_drivers_installed():
@@ -686,14 +966,14 @@ class RestoreIosApp(ctk.CTk):
 
         self._run_async(task)
 
-    def _create_app_card(self, app: AppEntry, row: int, col: int) -> None:
+    def _create_app_card(self, app: AppEntry, row: int, col: int) -> ctk.CTkFrame:
         card = glass_frame(self.app_list)
         card.grid(
             row=row,
             column=col,
             sticky="nsew",
-            padx=(0 if col == 0 else 5, 5 if col == 0 else 0),
-            pady=4,
+            padx=(0 if col == 0 else 6, 6 if col == 0 else 0),
+            pady=6,
         )
         card.grid_columnconfigure(1, weight=1)
         self._app_rows[app.id] = card
@@ -701,10 +981,10 @@ class RestoreIosApp(ctk.CTk):
         icon = self.icon_loader.get_app_icon(app, size=44)
         self._icon_refs.append(icon)
         icon_label = ctk.CTkLabel(card, text="", image=icon)
-        icon_label.grid(row=0, column=0, padx=(12, 8), pady=10)
+        icon_label.grid(row=0, column=0, padx=(CARD_PADX, 12), pady=CARD_PADY)
 
         text_wrap = ctk.CTkFrame(card, fg_color="transparent")
-        text_wrap.grid(row=0, column=1, sticky="ew", pady=10, padx=(0, 10))
+        text_wrap.grid(row=0, column=1, sticky="ew", pady=CARD_PADY, padx=(0, CARD_PADX))
 
         if app.maskTitle:
             title_line = app.maskTitle
@@ -732,9 +1012,11 @@ class RestoreIosApp(ctk.CTk):
 
         self._bind_click(card, lambda: self._select_app(app))
         self._bind_card_hover(card, app.id)
+        return card
 
     def _highlight_card(self, app_id: str) -> None:
         for card_id, row in self._app_rows.items():
+            self._anim.cancel(f"hover:{card_id}")
             if card_id == app_id:
                 row.configure(
                     fg_color=THEME["glass_selected"],
@@ -774,6 +1056,7 @@ class RestoreIosApp(ctk.CTk):
         dialog.grab_set()
         dialog.configure(fg_color=THEME["bg"])
         dialog.after(50, lambda: apply_glass_window(dialog))
+        fade_in_window(dialog)
 
         if logo := self.icon_loader.get_logo(36):
             self._icon_refs.append(logo)

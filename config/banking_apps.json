@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "category": "Банковские приложения",
   "apps": [
     {
@@ -11,6 +11,44 @@
       "maskTitle": "Семейный Онлайн",
       "released": "2026-06-23",
       "removed": "2026-06-24",
+      "description": "СберБанк Онлайн"
+    },
+    {
+      "id": "sber-finansy-online",
+      "title": "Сбербанк",
+      "bankGroup": "sber",
+      "bundleId": "",
+      "appId": 6749261529,
+      "maskTitle": "Финансы Онлайн",
+      "released": "2025-12-01",
+      "description": "СберБанк Онлайн"
+    },
+    {
+      "id": "sber-sbol",
+      "title": "Сбербанк",
+      "bankGroup": "sber",
+      "bundleId": "",
+      "appId": 1631810724,
+      "maskTitle": "СБОЛ",
+      "description": "СберБанк Онлайн"
+    },
+    {
+      "id": "sber-byudzhet-online",
+      "title": "Сбербанк",
+      "bankGroup": "sber",
+      "bundleId": "",
+      "appId": 6499320220,
+      "maskTitle": "Бюджет Онлайн",
+      "released": "2024-10-01",
+      "description": "СберБанк Онлайн"
+    },
+    {
+      "id": "sber-uchet-online",
+      "title": "Сбербанк",
+      "bankGroup": "sber",
+      "bundleId": "",
+      "appId": 6473541769,
+      "maskTitle": "Учёт Онлайн",
       "description": "СберБанк Онлайн"
     },
     {
@@ -35,16 +73,6 @@
       "description": "Т-Банк"
     },
     {
-      "id": "vtb-sirius",
-      "title": "ВТБ",
-      "bankGroup": "vtb",
-      "bundleId": "",
-      "appId": 6749962031,
-      "maskTitle": "Сириус",
-      "released": "2026-06-05",
-      "description": "ВТБ Онлайн"
-    },
-    {
       "id": "alfa-apgreyd",
       "title": "Альфа-Банк",
       "bankGroup": "alfa",
@@ -62,6 +90,24 @@
       "appId": 6764576497,
       "maskTitle": "Холдер",
       "released": "2026-05-01",
+      "description": "Альфа-Банк"
+    },
+    {
+      "id": "alfa-dengi-vsem",
+      "title": "Альфа-Банк",
+      "bankGroup": "alfa",
+      "bundleId": "",
+      "appId": 6444695749,
+      "maskTitle": "Деньги всем",
+      "description": "Альфа-Банк"
+    },
+    {
+      "id": "alfa-a-klyuch",
+      "title": "Альфа-Банк",
+      "bankGroup": "alfa",
+      "bundleId": "",
+      "appId": 6746730236,
+      "maskTitle": "А-Ключ",
       "description": "Альфа-Банк"
     },
     {
@@ -86,6 +132,44 @@
       "description": "Совкомбанк / Халва"
     },
     {
+      "id": "sovcom-tratium",
+      "title": "Совкомбанк",
+      "bankGroup": "sovcom",
+      "bundleId": "",
+      "appId": 6748080126,
+      "maskTitle": "Тратиум",
+      "released": "2025-08-01",
+      "description": "Совкомбанк / Халва"
+    },
+    {
+      "id": "sovcom-sravni",
+      "title": "Совкомбанк",
+      "bankGroup": "sovcom",
+      "bundleId": "",
+      "appId": 6755602284,
+      "maskTitle": "Сравни — сервисы, магазины",
+      "released": "2025-12-01",
+      "description": "Совкомбанк / Халва"
+    },
+    {
+      "id": "sovcom-moy-byudzhet-plus",
+      "title": "Совкомбанк",
+      "bankGroup": "sovcom",
+      "bundleId": "",
+      "appId": 6743214681,
+      "maskTitle": "Мой Бюджет+",
+      "description": "Совкомбанк / Халва"
+    },
+    {
+      "id": "sovcom-esche-karty-plus",
+      "title": "Совкомбанк",
+      "bankGroup": "sovcom",
+      "bundleId": "",
+      "appId": 6737838839,
+      "maskTitle": "Еще карты+",
+      "description": "Совкомбанк / Халва"
+    },
+    {
       "id": "gpb-digital-safe",
       "title": "Газпромбанк",
       "bankGroup": "gazprom",
@@ -94,6 +178,52 @@
       "maskTitle": "Цифровой сейф",
       "released": "2026-04-13",
       "description": "Газпромбанк"
+    },
+    {
+      "id": "psb-chaynaya-ceremoniya",
+      "title": "ПСБ",
+      "bankGroup": "psb",
+      "bundleId": "",
+      "appId": 6754700095,
+      "maskTitle": "Чайная церемония",
+      "released": "2026-04-24",
+      "description": "ПСБ"
+    },
+    {
+      "id": "vtb-sirius",
+      "title": "ВТБ",
+      "bankGroup": "vtb",
+      "bundleId": "",
+      "appId": 6749962031,
+      "maskTitle": "Сириус",
+      "released": "2026-06-05",
+      "description": "ВТБ Онлайн"
+    },
+    {
+      "id": "mts-bank",
+      "title": "МТС Банк",
+      "bankGroup": "mts",
+      "bundleId": "",
+      "appId": 1184367593,
+      "description": "МТС Банк"
+    },
+    {
+      "id": "mts-dom-yogi",
+      "title": "МТС Банк",
+      "bankGroup": "mts",
+      "bundleId": "",
+      "appId": 6745097862,
+      "maskTitle": "Дом йоги",
+      "description": "МТС Банк"
+    },
+    {
+      "id": "mts-kofe-v-karmane",
+      "title": "МТС Банк",
+      "bankGroup": "mts",
+      "bundleId": "",
+      "appId": 6744692203,
+      "maskTitle": "Кофе в Кармане",
+      "description": "МТС Банк"
     }
   ]
 }

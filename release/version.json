@@ -1,5 +1,5 @@
 {
-  "version": "1.1.2",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.1.2/GROMOV-RestorePlus-Setup.exe",
-  "notes": "Исправлена установка Почты Mail.ru: верный bundle ID для App Store ID 511310430."
+  "version": "1.1.3",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.1.3/GROMOV-RestorePlus-Setup.exe",
+  "notes": "Плавные анимации интерфейса, улучшенные иконки приложений и более дружелюбный дизайн каталога."
 }

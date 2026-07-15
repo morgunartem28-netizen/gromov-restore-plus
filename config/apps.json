@@ -36,6 +36,33 @@
       "description": "Официальная почта Mail.ru",
       "iconUrl": "",
       "iconFile": "mailru.png"
+    },
+    {
+      "id": "rutube",
+      "title": "Rutube",
+      "bundleId": "ru.rutube.main",
+      "appId": 966511294,
+      "description": "Официальное приложение Rutube",
+      "iconUrl": "",
+      "iconFile": "rutube.png"
+    },
+    {
+      "id": "vk-video",
+      "title": "VK Видео",
+      "bundleId": "com.vk.vkvideo",
+      "appId": 6447614666,
+      "description": "Фильмы, сериалы и шоу VK",
+      "iconUrl": "",
+      "iconFile": "vk-video.png"
+    },
+    {
+      "id": "vk-music",
+      "title": "VK Музыка",
+      "bundleId": "com.vk.vkclient.music",
+      "appId": 1054372220,
+      "description": "Музыка, подкасты и аудиокниги VK",
+      "iconUrl": "",
+      "iconFile": "vk-music.png"
     }
   ]
 }
