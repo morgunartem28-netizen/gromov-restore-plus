@@ -1,4 +1,4 @@
-﻿{
+{
   "version": "1.1.4",
   "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.1.4/GROMOV-RestorePlus-Setup.exe",
   "notes": "Исправление установщика: в пакет снова включены папки tools (ipatool, go-ios) и drivers; шаг установки драйверов не блокирует установку, если файлы отсутствуют."

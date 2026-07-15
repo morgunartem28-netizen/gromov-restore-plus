@@ -68,7 +68,7 @@ def _fetch_manifest(url: str) -> dict:
     )
     try:
         with urllib.request.urlopen(request, timeout=_CHECK_TIMEOUT_SEC) as response:
-            raw = response.read().decode("utf-8")
+            raw = response.read().decode("utf-8-sig")
     except urllib.error.HTTPError as exc:
         raise UpdateCheckError(f"Сервер обновлений ответил с ошибкой ({exc.code}).") from exc
     except urllib.error.URLError as exc:
@@ -81,7 +81,10 @@ def _fetch_manifest(url: str) -> dict:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise UpdateCheckError("Сервер вернул некорректный ответ.") from exc
+        raise UpdateCheckError(
+            "Сервер вернул некорректный ответ (не JSON).\n"
+            "Проверьте manifest_url в config/update.json."
+        ) from exc
     if not isinstance(payload, dict):
         raise UpdateCheckError("Сервер вернул некорректный ответ.")
     return payload
