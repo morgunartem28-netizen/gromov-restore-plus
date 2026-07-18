@@ -9,5 +9,5 @@
     "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe"
   ],
   "sha256": "2b1f6fb9e6cd9a82a12b86efc52b215facb896578db43d780aa3c33ba5d04324",
-  "notes": "1.2.7: снова скачивание обновления через браузер (как раньше, стабильнее на разных ПК); проверка версии в приложении; загрузка внутри приложения — опционально."
+  "notes": "1.2.7: усилено автоскачивание Setup (несколько зеркал), WinHTTP/PAC-прокси, лог update_debug.log. Для ПК на 1.1.x/<=1.2.1 при блоке GitHub raw нужен один silent deploy (scripts/silent_update.ps1 или Setup) — дальше обновления автоматом."
 }

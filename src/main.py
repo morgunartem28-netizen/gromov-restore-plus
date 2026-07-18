@@ -1166,10 +1166,10 @@ class RestoreIosApp(ctk.CTk):
                             "другие зеркала (GitHub + прокси), даже когда встроенная "
                             "загрузка не проходит."
                         ),
-                        primary_text="Скачать в браузере",
-                        on_primary=lambda: self._open_update_in_browser(result.setup_url),
-                        secondary_text="Повторить в приложении",
-                        on_secondary=lambda: self._download_update(result),
+                        primary_text="Повторить в приложении",
+                        on_primary=lambda: self._download_update(result),
+                        secondary_text="Открыть в браузере",
+                        on_secondary=lambda: self._open_update_in_browser(result.setup_url),
                         tertiary_text="Закрыть",
                     ),
                 )
@@ -1204,51 +1204,48 @@ class RestoreIosApp(ctk.CTk):
     def _present_update_available(self, result: UpdateCheckResult) -> None:
         if result.setup_url:
             self._last_setup_url = result.setup_url
-        # Browser-first: same path that worked on other PCs (system TLS/proxy).
-        self._open_update_in_browser(result.setup_url)
-        self._toast(
-            "Скачивание обновления открыто в браузере — установите Setup",
-            kind="info",
-        )
         notes = f"\n\n{result.notes}" if result.notes else ""
         message = (
             f"Доступна новая версия {result.latest_version}.\n"
             f"Текущая версия: {result.current_version}.{notes}\n\n"
-            "Скачивание обновления открыто в браузере — установите Setup.\n"
-            "Это надёжнее на разных ПК (антивирус, прокси, блокировка GitHub).\n"
-            "При желании можно скачать внутри приложения (проверка SHA256)."
+            "Скачивание установщика запускается в приложении "
+            "(несколько зеркал + проверка SHA256).\n"
+            "Браузер — только запасной вариант, если встроенная загрузка не пройдёт."
         )
         self._show_update_action_dialog(
             title="Доступно обновление",
             message=message,
-            primary_text="Открыть снова в браузере",
-            on_primary=lambda: self._open_update_in_browser(result.setup_url),
-            secondary_text="Скачать в приложении",
-            on_secondary=lambda: self._download_update(result),
+            primary_text="Скачать в приложении",
+            on_primary=lambda: self._download_update(result),
+            secondary_text="Открыть в браузере",
+            on_secondary=lambda: self._open_update_in_browser(result.setup_url),
             tertiary_text="Позже",
             browser_url=result.setup_url,
         )
+        # Prefer fully automatic path: start in-app download immediately.
+        if result.setup_url and result.sha256:
+            self._toast(
+                f"Скачивание обновления {result.latest_version}…",
+                kind="info",
+            )
+            self._download_update(result)
 
     def _present_update_check_failure(self, message: str) -> None:
-        releases_url = GITHUB_RELEASES_LATEST
-        self._log(f"Открыта страница релизов в браузере:\n{releases_url}")
-        webbrowser.open(releases_url)
-        self._toast(
-            "Страница загрузки открыта в браузере",
-            kind="warning",
-        )
+        debug_path = update_debug_log_path()
         self._show_update_action_dialog(
             title="Не удалось проверить обновления",
             message=(
                 f"{message}\n\n"
-                "Проверка из приложения может не пройти, даже если сайт GitHub "
-                "открывается в браузере (другой путь сети, TLS, блокировка CDN).\n\n"
-                "Страница релизов уже открыта в браузере — скачайте Setup оттуда."
+                "Проверка из приложения может не пройти, даже если интернет работает "
+                "(блокировка raw.githubusercontent.com / GitHub, TLS антивируса, прокси).\n"
+                f"Диагностика: {debug_path}\n\n"
+                "Повторите проверку. Браузер — запасной путь, если зеркала "
+                "из приложения недоступны."
             ),
-            primary_text="Открыть релизы в браузере",
-            on_primary=lambda: webbrowser.open(GITHUB_RELEASES_LATEST),
-            secondary_text="Повторить проверку",
-            on_secondary=self._check_updates,
+            primary_text="Повторить проверку",
+            on_primary=self._check_updates,
+            secondary_text="Открыть в браузере",
+            on_secondary=lambda: self._open_update_in_browser(self._last_setup_url),
             tertiary_text="Закрыть",
         )
 
