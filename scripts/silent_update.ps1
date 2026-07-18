@@ -1,13 +1,13 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Silently download and install the latest GROMOV Restore+ Setup.
 
 .DESCRIPTION
-  Practical one-shot for fleets stuck on 1.1.x / ≤1.2.1 when
+  Practical one-shot for fleets stuck on 1.1.x / в‰¤1.2.1 when
   raw.githubusercontent.com is blocked: those binaries never ask for mirrors,
   so no new release can auto-update them. Run this once remotely (AnyDesk /
-  RMM / PsExec) — no browser UI.
+  RMM / PsExec) вЂ” no browser UI.
 
   After 1.2.7+ is installed, further updates are in-app automatic if any
   manifest/Setup mirror works.
@@ -79,7 +79,11 @@ function Get-Manifest {
                 $headers["Accept"] = "application/vnd.github.raw"
             }
             $resp = Invoke-WebRequest -Uri $tryUrl -UseBasicParsing -TimeoutSec 25 -Headers $headers
-            $json = $resp.Content | ConvertFrom-Json
+            $body = $resp.Content
+            if ($body -is [byte[]]) {
+                $body = [Text.Encoding]::UTF8.GetString($body)
+            }
+            $json = $body | ConvertFrom-Json
             if (-not $json.version) { throw "no version field" }
             if (-not $json.sha256) { throw "no sha256 field" }
             Write-Step "manifest ok version=$($json.version) sha256=$($json.sha256)"
@@ -188,7 +192,7 @@ Write-Step ("setup mirrors: " + ($candidates -join " | "))
 Get-SetupFile -Urls $candidates -Dest $setupPath -ExpectedSha $sha | Out-Null
 
 if ($SkipInstall) {
-    Write-Step "SkipInstall set — file ready: $setupPath"
+    Write-Step "SkipInstall set - file ready: $setupPath"
     exit 0
 }
 
