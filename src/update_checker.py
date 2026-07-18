@@ -388,12 +388,31 @@ def _manifest_host(url: str) -> str:
         return "unknown"
 
 
+def _with_cache_bust(url: str) -> str:
+    """Append a short-lived query param so CDN/raw caches are less sticky."""
+    parsed = urllib.parse.urlparse(url)
+    query = [
+        (key, value)
+        for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in {"t", "_", "cb"}
+    ]
+    query.append(("t", str(int(time.time()))))
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
+
+
 def _fetch_manifest(urls: list[str]) -> dict:
+    """Fetch all mirrors and prefer the payload with the highest version.
+
+    A stale HTTP 200 from raw.githubusercontent.com must not hide a newer
+    manifest already visible on jsDelivr or another mirror.
+    """
     errors: list[str] = []
+    candidates: list[dict] = []
     for url in urls:
         host = _manifest_host(url)
+        fetch_url = _with_cache_bust(url)
         try:
-            raw = _fetch_bytes(url, timeout=_CHECK_TIMEOUT_SEC).decode("utf-8-sig")
+            raw = _fetch_bytes(fetch_url, timeout=_CHECK_TIMEOUT_SEC).decode("utf-8-sig")
         except UpdateCheckError as exc:
             errors.append(f"{host}: {str(exc).split(chr(10), 1)[0]}")
             continue
@@ -405,7 +424,17 @@ def _fetch_manifest(urls: list[str]) -> dict:
         if not isinstance(payload, dict):
             errors.append(f"{host}: ответ не объект JSON")
             continue
-        return payload
+        version = str(payload.get("version") or "").strip()
+        if not version:
+            errors.append(f"{host}: нет версии в манифесте")
+            continue
+        candidates.append(payload)
+
+    if candidates:
+        return max(
+            candidates,
+            key=lambda item: parse_version(str(item.get("version") or "")),
+        )
 
     if not errors:
         raise UpdateCheckError(
