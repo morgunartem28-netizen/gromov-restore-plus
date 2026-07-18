@@ -52,3 +52,18 @@ class AppSettings:
         else:
             self._data.pop("selected_udid", None)
         self.save()
+
+    @property
+    def recent_searches(self) -> list[str]:
+        raw = self._data.get("recent_searches") or []
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()][:8]
+
+    def remember_search(self, query: str) -> None:
+        q = query.strip()
+        if len(q) < 2:
+            return
+        items = [q] + [item for item in self.recent_searches if item.lower() != q.lower()]
+        self._data["recent_searches"] = items[:8]
+        self.save()

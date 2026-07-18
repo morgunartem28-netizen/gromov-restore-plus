@@ -92,7 +92,7 @@ def is_https_url(url: str) -> bool:
 
 
 def is_trusted_update_url(url: str) -> bool:
-    """Allow only HTTPS URLs on known GitHub release/raw hosts."""
+    """Allow only HTTPS URLs on known GitHub release/raw hosts and CDN mirrors."""
     lower = url.strip().lower()
     if not lower.startswith("https://"):
         return False
@@ -101,5 +101,9 @@ def is_trusted_update_url(url: str) -> bool:
         "https://raw.githubusercontent.com/",
         "https://objects.githubusercontent.com/",
         "https://release-assets.githubusercontent.com/",
+        # jsDelivr mirrors for version.json when raw.githubusercontent.com is blocked
+        "https://cdn.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus",
+        "https://fastly.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus",
+        "https://gcore.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus",
     )
     return any(lower.startswith(host) for host in allowed_hosts)

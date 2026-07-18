@@ -1,6 +1,6 @@
 {
-  "version": "1.2.1",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.1/GROMOV-RestorePlus-Setup.exe",
-  "sha256": "e507bd2f9ebd2c2cf8f36792cb915d235083b0dc2c89763151f4d76b9c0073b5",
-  "notes": "Крупное обновление: секреты Apple ID не в argv (env + DPAPI), полный выход из аккаунта, очередь установок с UDID, понятные ошибки, упрощённый UI, диалог «Проверить iPhone», закреплённые tools, очистка данных при удалении."
+  "version": "1.2.2",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.2/GROMOV-RestorePlus-Setup.exe",
+  "sha256": "c647ed30e714537af9fe833f72d4c356a619352a10c35e854f2d718cdf84236f",
+  "notes": "Исправлена проверка обновлений: зеркала манифеста (jsDelivr/GitHub), понятные ошибки сети (таймаут, DNS, SSL, офлайн), certifi для TLS в сборке. Светлый UI, тосты и фазы установки."
 }

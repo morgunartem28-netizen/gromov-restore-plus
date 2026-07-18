@@ -27,7 +27,18 @@ from ipatool_client import IpatoolCancelled, IpatoolClient, IpatoolError
 from login_dialog import AppleLoginDialog
 from security_utils import mask_email, sanitize_auth_result_for_log
 from support_report import build_support_report
-from theme import CARD_PADX, CARD_PADY, THEME, empty_state, glass_frame, primary_button, secondary_button, skeleton_card, ui_font
+from theme import (
+    CARD_PADX,
+    CARD_PADY,
+    THEME,
+    empty_state,
+    glass_frame,
+    primary_button,
+    secondary_button,
+    skeleton_card,
+    ui_font,
+)
+from toast import ToastHost
 from tool_integrity import verify_bundled_tools
 from ui_animations import (
     AnimationRunner,
@@ -44,16 +55,25 @@ from user_errors import friendly_error
 from version import APP_VERSION
 from window_effects import apply_glass_window
 
+_INSTALL_PHASES = (
+    ("prepare", "Подготовка"),
+    ("download", "Скачивание"),
+    ("verify", "Проверка"),
+    ("transfer", "Передача"),
+    ("install", "Установка"),
+    ("done", "Готово"),
+)
+
 
 class RestoreIosApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
 
         self.title("GROMOV Restore+")
-        self.geometry("1080x720")
-        self.minsize(960, 640)
+        self.geometry("1120x740")
+        self.minsize(980, 660)
         self._set_window_icon()
 
         self.config_manager = ConfigManager()
@@ -79,10 +99,12 @@ class RestoreIosApp(ctk.CTk):
         self._progress_anim_id: str | None = None
         self._progress_value = 0.0
         self._phase_labels: dict[str, ctk.CTkLabel] = {}
+        self._phase_order = [key for key, _ in _INSTALL_PHASES]
         self._anim = AnimationRunner(self)
         self._search_debouncer = SearchDebouncer(self, delay_ms=250, callback=self._apply_bank_search)
         self._log_visible = False
         self._version_click_count = 0
+        self._toasts: ToastHost | None = None
         self._install_queue = InstallQueue(
             worker=self._queue_worker,
             on_changed=lambda: self.after(0, self._refresh_queue_ui),
@@ -92,9 +114,11 @@ class RestoreIosApp(ctk.CTk):
         self._queue_seen: dict[str, str] = {}
 
         self._build_layout()
+        self._toasts = ToastHost(self)
         self._restore_catalog_state()
         self._refresh_app_list()
-        self.after(50, lambda: apply_glass_window(self))
+        self._render_recent_searches()
+        self.after(50, lambda: apply_glass_window(self, dark=False))
         self.after(200, self._startup_checks)
         self.after(300, self._warm_icon_cache)
         self.after(400, self._purge_stale_caches)
@@ -224,7 +248,7 @@ class RestoreIosApp(ctk.CTk):
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.grid(row=1, column=1, sticky="nsew", padx=(8, 16), pady=12)
         main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(2, weight=1)
+        main.grid_rowconfigure(3, weight=1)
 
         top_bar = glass_frame(main)
         top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
@@ -263,7 +287,7 @@ class RestoreIosApp(ctk.CTk):
         bind_press_feedback(self._anim, self.install_button)
 
         catalog_nav = ctk.CTkFrame(main, fg_color="transparent")
-        catalog_nav.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        catalog_nav.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         catalog_nav.grid_columnconfigure(1, weight=1)
 
         self.catalog_back_button = secondary_button(
@@ -289,22 +313,27 @@ class RestoreIosApp(ctk.CTk):
             catalog_nav,
             textvariable=self.bank_search_var,
             placeholder_text="Поиск по каталогу и банкам...",
-            height=32,
+            height=36,
+            corner_radius=12,
             fg_color=THEME["input"],
             border_color=THEME["glass_border"],
-            text_color=THEME["silver"],
-            width=220,
+            text_color=THEME["text"],
+            width=260,
         )
         self.bank_search_entry.grid(row=0, column=2, sticky="e", padx=(10, 0))
         self.bank_search_var.trace_add("write", lambda *_: self._search_debouncer.trigger())
+        self.bank_search_entry.bind("<Return>", lambda _e: self._commit_search())
+
+        self.recent_searches_frame = ctk.CTkFrame(main, fg_color="transparent")
+        self.recent_searches_frame.grid(row=2, column=0, sticky="ew", pady=(0, 4))
 
         self.app_list = ctk.CTkScrollableFrame(main, fg_color="transparent")
-        self.app_list.grid(row=2, column=0, sticky="nsew")
+        self.app_list.grid(row=3, column=0, sticky="nsew")
         self.app_list.grid_columnconfigure(0, weight=1)
         self.app_list.grid_columnconfigure(1, weight=1)
 
         log_frame = glass_frame(main)
-        log_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        log_frame.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         log_frame.grid_columnconfigure(0, weight=1)
         self._log_frame = log_frame
 
@@ -312,7 +341,7 @@ class RestoreIosApp(ctk.CTk):
             log_frame,
             text="Журнал",
             font=ui_font(13, weight="bold"),
-            text_color=THEME["silver"],
+            text_color=THEME["text"],
         )
         self.log_title.grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
 
@@ -328,8 +357,24 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["muted"],
             font=ui_font(13),
         )
-        self.progress_label.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.progress_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+
+        self.phases_row = ctk.CTkFrame(self.progress_frame, fg_color="transparent")
+        self.phases_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         self._phase_labels = {}
+        for index, (key, label) in enumerate(_INSTALL_PHASES):
+            pill = ctk.CTkLabel(
+                self.phases_row,
+                text=label,
+                fg_color=THEME["chip"],
+                text_color=THEME["muted"],
+                corner_radius=10,
+                font=ui_font(11),
+                height=24,
+                padx=8,
+            )
+            pill.pack(side="left", padx=(0 if index == 0 else 4, 0))
+            self._phase_labels[key] = pill
 
         self.progress_bar = ctk.CTkProgressBar(
             self.progress_frame,
@@ -338,7 +383,7 @@ class RestoreIosApp(ctk.CTk):
             fg_color=THEME["glass_border"],
             corner_radius=8,
         )
-        self.progress_bar.grid(row=1, column=0, sticky="ew")
+        self.progress_bar.grid(row=2, column=0, sticky="ew")
         self.progress_bar.set(0)
 
         self.log_box = ctk.CTkTextbox(
@@ -423,11 +468,41 @@ class RestoreIosApp(ctk.CTk):
 
         threading.Thread(target=task, daemon=True).start()
 
+    def _toast(self, message: str, *, kind: str = "info") -> None:
+        if self._toasts is None:
+            return
+        try:
+            self._toasts.show(message, kind=kind)  # type: ignore[arg-type]
+        except Exception:
+            pass
+
     def _reset_phases(self) -> None:
-        return
+        for key, label in self._phase_labels.items():
+            label.configure(
+                fg_color=THEME["chip"],
+                text_color=THEME["muted"],
+                text=dict(_INSTALL_PHASES).get(key, key),
+            )
 
     def _mark_phase(self, phase: str, *, active: bool = False, done: bool = False) -> None:
-        return
+        if phase not in self._phase_labels and phase != "done":
+            return
+        try:
+            active_index = self._phase_order.index(phase)
+        except ValueError:
+            active_index = len(self._phase_order) - 1 if phase == "done" else -1
+        all_done = phase == "done" or done
+        for index, key in enumerate(self._phase_order):
+            label = self._phase_labels.get(key)
+            if label is None:
+                continue
+            title = dict(_INSTALL_PHASES).get(key, key)
+            if all_done or index < active_index:
+                label.configure(fg_color=THEME["success_soft"], text_color=THEME["success"], text=f"✓ {title}")
+            elif key == phase and active:
+                label.configure(fg_color=THEME["accent_soft"], text_color=THEME["accent"], text=title)
+            else:
+                label.configure(fg_color=THEME["chip"], text_color=THEME["muted"], text=title)
 
     def _cancel_tools(self) -> None:
         if self.ipatool:
@@ -486,6 +561,7 @@ class RestoreIosApp(ctk.CTk):
             title = job.app.maskTitle or job.app.title
             if job.status == JobStatus.DONE and prev == JobStatus.RUNNING.value:
                 self._log(f"Установлено: {title}")
+                self._toast(f"Установлено: {title}", kind="success")
                 messagebox.showinfo(
                     "Готово",
                     f"Приложение «{title}» установлено.\nПроверьте домашний экран iPhone.",
@@ -493,6 +569,7 @@ class RestoreIosApp(ctk.CTk):
             elif job.status == JobStatus.FAILED and prev == JobStatus.RUNNING.value:
                 self._last_failed_app = job.app
                 title_e, message = friendly_error(job.error or "Ошибка", domain="Установка")
+                self._toast(f"Ошибка: {title}", kind="error")
                 messagebox.showerror(title_e, f"«{title}»\n\n{message}")
 
     def _remember_devices(self, devices: list[DeviceInfo]) -> None:
@@ -847,12 +924,22 @@ class RestoreIosApp(ctk.CTk):
             except UpdateCheckError as exc:
                 message = str(exc)
                 self.after(0, lambda m=message: self._log(f"Обновление: {m}"))
+                self.after(0, lambda: self._toast("Не удалось проверить обновления", kind="warning"))
                 self.after(0, lambda m=message: messagebox.showwarning("Обновление", m))
+                return
+            except Exception as exc:  # noqa: BLE001 — surface unexpected transport bugs
+                message = (
+                    "Не удалось проверить обновления из-за внутренней ошибки.\n"
+                    f"{type(exc).__name__}: {exc}"
+                )
+                self.after(0, lambda m=message: self._log(f"Обновление: {m}"))
+                self.after(0, lambda m=message: messagebox.showerror("Обновление", m))
                 return
 
             if result.is_up_to_date:
                 text = f"У вас актуальная версия ({result.current_version})."
                 self.after(0, lambda: self._log(text))
+                self.after(0, lambda: self._toast(text, kind="success"))
                 self.after(0, lambda: messagebox.showinfo("Обновление", text))
                 return
 
@@ -1015,6 +1102,49 @@ class RestoreIosApp(ctk.CTk):
         self._global_search_query = query
         self._refresh_app_list()
 
+    def _commit_search(self) -> None:
+        query = self.bank_search_var.get().strip()
+        if len(query) >= 2:
+            self.settings.remember_search(query)
+            self._render_recent_searches()
+        self._apply_bank_search()
+
+    def _render_recent_searches(self) -> None:
+        frame = getattr(self, "recent_searches_frame", None)
+        if frame is None:
+            return
+        for child in frame.winfo_children():
+            child.destroy()
+        recent = self.settings.recent_searches
+        if not recent:
+            frame.grid_remove()
+            return
+        frame.grid()
+        ctk.CTkLabel(
+            frame,
+            text="Недавние:",
+            font=ui_font(11),
+            text_color=THEME["muted"],
+        ).pack(side="left", padx=(0, 6))
+        for item in recent[:5]:
+            chip = ctk.CTkButton(
+                frame,
+                text=item,
+                height=26,
+                width=1,
+                corner_radius=12,
+                fg_color=THEME["chip"],
+                hover_color=THEME["accent_soft"],
+                text_color=THEME["text_secondary"],
+                font=ui_font(11),
+                command=lambda q=item: self._use_recent_search(q),
+            )
+            chip.pack(side="left", padx=(0, 4))
+
+    def _use_recent_search(self, query: str) -> None:
+        self.bank_search_var.set(query)
+        self._commit_search()
+
     def _update_catalog_header(self) -> None:
         self.bank_search_entry.grid()
         if self._catalog_view == "root":
@@ -1136,14 +1266,16 @@ class RestoreIosApp(ctk.CTk):
                 if self._bank_search_query:
                     empty_state(
                         self.app_list,
-                        emoji="🔍",
+                        icon="?",
                         title="Ничего не найдено",
                         hint="Попробуйте другой запрос или очистите поле поиска.",
+                        action_text="Очистить поиск",
+                        action=lambda: self.bank_search_var.set(""),
                     )
                 else:
                     empty_state(
                         self.app_list,
-                        emoji="📭",
+                        icon="○",
                         title="В этом банке пока нет приложений",
                         hint="Загляните позже — каталог пополняется.",
                     )
@@ -1172,9 +1304,11 @@ class RestoreIosApp(ctk.CTk):
                 if not matches:
                     empty_state(
                         self.app_list,
-                        emoji="🔍",
+                        icon="?",
                         title="Ничего не найдено",
                         hint="Попробуйте другое название или очистите поиск.",
+                        action_text="Очистить поиск",
+                        action=lambda: self.bank_search_var.set(""),
                     )
                     return
                 self._populate_cards_incremental(matches, token)
@@ -1289,14 +1423,14 @@ class RestoreIosApp(ctk.CTk):
         card.grid_columnconfigure(1, weight=1)
         self._app_rows["__banking_folder__"] = card
 
-        icon_wrap = ctk.CTkFrame(card, fg_color=THEME["accent"], corner_radius=14, width=48, height=48)
+        icon_wrap = ctk.CTkFrame(card, fg_color=THEME["accent_soft"], corner_radius=14, width=48, height=48)
         icon_wrap.grid(row=0, column=0, padx=(CARD_PADX, 12), pady=CARD_PADY)
         icon_wrap.grid_propagate(False)
         ctk.CTkLabel(
             icon_wrap,
             text="₽",
-            font=ctk.CTkFont(size=22, weight="bold"),
-            text_color=THEME["bg"],
+            font=ui_font(20, weight="bold"),
+            text_color=THEME["accent"],
         ).place(relx=0.5, rely=0.5, anchor="center")
 
         text_wrap = ctk.CTkFrame(card, fg_color="transparent")

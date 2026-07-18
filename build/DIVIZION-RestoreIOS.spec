@@ -2,12 +2,14 @@
 import os
 import sys
 
+import certifi
 import customtkinter
 
 block_cipher = None
 project_root = os.path.abspath(os.path.join(SPECPATH, ".."))
 src_dir = os.path.join(project_root, "src")
 ctk_path = os.path.dirname(customtkinter.__file__)
+certifi_pem = certifi.where()
 
 sys.path.insert(0, src_dir)
 
@@ -19,8 +21,9 @@ a = Analysis(
         (ctk_path, "customtkinter"),
         (os.path.join(project_root, "config"), "config"),
         (os.path.join(project_root, "assets"), "assets"),
+        (certifi_pem, "certifi"),
     ],
-    hiddenimports=["PIL._tkinter_finder"],
+    hiddenimports=["PIL._tkinter_finder", "certifi"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
