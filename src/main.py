@@ -1,28 +1,31 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import threading
 import time
 import tkinter as tk
 import webbrowser
+from pathlib import Path
 from tkinter import messagebox
 from typing import Callable
 
 import customtkinter as ctk
 
 from app_paths import data_dir, ensure_app_dirs, install_dir, resource_dir
-from config_manager import BANKS_FOLDER_TITLE, AppEntry, BankGroup, ConfigManager
+from config_manager import BANKS_FOLDER_TITLE, BANK_GROUPS, AppEntry, BankGroup, ConfigManager
 from device_installer import DeviceInstaller, DeviceInstallerError
 from disk_utils import DiskSpaceError, ensure_download_space
 from driver_installer import DriverInstallerError, apple_drivers_installed, install_apple_drivers
 from icon_loader import IconLoader
+from ipa_utils import purge_stale_ipa_cache, purge_stale_staging
 from ipatool_client import IpatoolClient, IpatoolError
 from login_dialog import AppleLoginDialog
 from theme import CARD_PADX, CARD_PADY, THEME, empty_state, glass_frame, primary_button, secondary_button, skeleton_card, ui_font
 from ui_animations import (
     AnimationRunner,
-    DURATION_NORMAL,
-    STAGGER_DELAY,
+    DURATION_FAST,
     SearchDebouncer,
     animate_progress_to,
     bind_press_feedback,
@@ -30,7 +33,8 @@ from ui_animations import (
     fade_in_window,
     reveal_card,
 )
-from update_checker import UpdateCheckError, check_for_updates
+from security_utils import sanitize_auth_result_for_log
+from update_checker import UpdateCheckError, check_for_updates, download_verified_installer
 from version import APP_VERSION
 from window_effects import apply_glass_window
 
@@ -58,18 +62,23 @@ class RestoreIosApp(ctk.CTk):
         self._catalog_bank_group: str | None = None
         self._bank_search_query = ""
         self._catalog_state_path = data_dir() / "catalog_state.json"
+        self._catalog_ready = False
         self._catalog_anim_token = 0
         self._progress_active = False
         self._progress_anim_id: str | None = None
         self._progress_value = 0.0
         self._anim = AnimationRunner(self)
         self._search_debouncer = SearchDebouncer(self, delay_ms=250, callback=self._apply_bank_search)
+        self._log_visible = False
+        self._version_click_count = 0
 
         self._build_layout()
         self._restore_catalog_state()
         self._refresh_app_list()
         self.after(50, lambda: apply_glass_window(self))
         self.after(200, self._startup_checks)
+        self.after(300, self._warm_icon_cache)
+        self.after(400, self._purge_stale_caches)
 
     def _set_window_icon(self) -> None:
         icon_path = resource_dir() / "assets" / "icon.ico"
@@ -126,12 +135,15 @@ class RestoreIosApp(ctk.CTk):
         header_actions = ctk.CTkFrame(header, fg_color="transparent")
         header_actions.grid(row=0, column=2, rowspan=2, padx=(0, 20), pady=16, sticky="e")
 
-        ctk.CTkLabel(
+        self.version_label = ctk.CTkLabel(
             header_actions,
             text=f"v{APP_VERSION}",
             font=ui_font(12),
             text_color=THEME["muted"],
-        ).pack(side="left", padx=(0, 10))
+            cursor="hand2",
+        )
+        self.version_label.pack(side="left", padx=(0, 10))
+        self.version_label.bind("<Button-1>", self._on_version_click)
 
         secondary_button(
             header_actions,
@@ -274,16 +286,18 @@ class RestoreIosApp(ctk.CTk):
         log_frame = glass_frame(main)
         log_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         log_frame.grid_columnconfigure(0, weight=1)
+        self._log_frame = log_frame
 
-        ctk.CTkLabel(
+        self.log_title = ctk.CTkLabel(
             log_frame,
             text="Журнал",
             font=ui_font(13, weight="bold"),
             text_color=THEME["silver"],
-        ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
+        )
+        self.log_title.grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
 
         self.progress_frame = ctk.CTkFrame(log_frame, fg_color="transparent")
-        self.progress_frame.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
+        self.progress_frame.grid(row=1, column=0, sticky="ew", padx=14, pady=(8, 8))
         self.progress_frame.grid_columnconfigure(0, weight=1)
         self.progress_frame.grid_remove()
 
@@ -315,6 +329,9 @@ class RestoreIosApp(ctk.CTk):
         )
         self.log_box.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 14))
         self.log_box.configure(state="disabled")
+        # Hidden for normal users — progress bar stays; unlock via 5 clicks on version.
+        self.log_title.grid_remove()
+        self.log_box.grid_remove()
 
     def _section_label(self, parent: ctk.CTkFrame, text: str, *, top_pad: int = 12) -> None:
         ctk.CTkLabel(
@@ -337,10 +354,48 @@ class RestoreIosApp(ctk.CTk):
         return primary_button(parent, text=text, command=command)
 
     def _log(self, message: str) -> None:
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", message + "\n")
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
+        if not getattr(self, "log_box", None):
+            return
+        try:
+            self.log_box.configure(state="normal")
+            self.log_box.insert("end", message + "\n")
+            self.log_box.see("end")
+            self.log_box.configure(state="disabled")
+        except tk.TclError:
+            pass
+
+    def _on_version_click(self, _event: object = None) -> None:
+        self._version_click_count += 1
+        if self._version_click_count < 5:
+            return
+        self._version_click_count = 0
+        self._toggle_log_panel()
+
+    def _toggle_log_panel(self) -> None:
+        self._log_visible = not self._log_visible
+        if self._log_visible:
+            self.log_title.grid()
+            self.log_box.grid()
+            self._log("Технический журнал включён (ещё 5 кликов по версии — скрыть).")
+        else:
+            self.log_title.grid_remove()
+            self.log_box.grid_remove()
+
+    def _purge_stale_caches(self) -> None:
+        """Remove old IPA cache from AppData — safe even if the app is installed elsewhere."""
+
+        def task() -> None:
+            try:
+                downloads = data_dir() / "downloads"
+                removed = purge_stale_ipa_cache(downloads)
+                staging = Path(tempfile.gettempdir()) / "restore-ios-apps"
+                removed += purge_stale_staging(staging)
+                if removed:
+                    self.after(0, lambda n=removed: self._log(f"Очистка кэша: удалено файлов — {n}"))
+            except Exception:
+                pass
+
+        threading.Thread(target=task, daemon=True).start()
 
     def _reset_progress(self) -> None:
         self._stop_progress_creep()
@@ -413,6 +468,20 @@ class RestoreIosApp(ctk.CTk):
             self._log("--- Проверка системы ---")
             self._log(driver_line)
             self._log(device_line)
+
+    def _warm_icon_cache(self) -> None:
+        """Warm PIL disk/memory for bank logos and catalog icons off the critical path."""
+
+        def task() -> None:
+            try:
+                groups = self.config_manager.list_bank_groups()
+                self.icon_loader.warm_bank_groups(groups, size=44)
+                apps = self.config_manager.list_apps()
+                self.icon_loader.warm_apps(apps, size=44)
+            except Exception:
+                pass
+
+        threading.Thread(target=task, daemon=True).start()
 
     def _startup_checks(self) -> None:
         def task() -> None:
@@ -516,8 +585,7 @@ class RestoreIosApp(ctk.CTk):
             self.config_manager.set_apple_account(email)
             self._log(f"Вход выполнен: {email}")
             self.auth_status_label.configure(text=f"Авторизован\n{email}")
-            if result:
-                self._log(str(result))
+            self._log(sanitize_auth_result_for_log(result))
 
         AppleLoginDialog(self, self.ipatool, on_success, icon_loader=self.icon_loader)
 
@@ -542,7 +610,9 @@ class RestoreIosApp(ctk.CTk):
                     0,
                     lambda: messagebox.showinfo(
                         "Выход",
-                        "Вы вышли из Apple ID.\nНажмите «Войти в Apple ID» для входа под другим аккаунтом.",
+                        "Вы вышли из Apple ID.\n"
+                        "Локальный ключ сессии удалён.\n"
+                        "Нажмите «Войти в Apple ID» для входа под другим аккаунтом.",
                     ),
                 )
             except IpatoolError as exc:
@@ -573,20 +643,69 @@ class RestoreIosApp(ctk.CTk):
             prompt = (
                 f"Доступна новая версия {result.latest_version}.\n"
                 f"Текущая версия: {result.current_version}.{notes}\n\n"
-                "Открыть страницу загрузки?"
+                "Скачать установщик и проверить SHA256?"
             )
             self.after(0, lambda: self._log(f"Доступна версия {result.latest_version}."))
 
             def ask_download() -> None:
-                if messagebox.askyesno("Доступно обновление", prompt):
-                    if result.setup_url:
-                        webbrowser.open(result.setup_url)
-                        self._log("Открыта ссылка на установщик.")
-                    else:
-                        messagebox.showwarning(
-                            "Обновление",
-                            "Ссылка на установщик не указана в манифесте обновлений.",
+                if not messagebox.askyesno("Доступно обновление", prompt):
+                    return
+                if not result.setup_url:
+                    messagebox.showwarning(
+                        "Обновление",
+                        "Ссылка на установщик не указана в манифесте обновлений.",
+                    )
+                    return
+                if not result.sha256:
+                    messagebox.showerror(
+                        "Обновление",
+                        "В манифесте нет SHA256 установщика.\n"
+                        "Обновление отменено — так безопаснее.",
+                    )
+                    return
+
+                def download_task() -> None:
+                    self.after(0, lambda: self._set_progress("Скачивание обновления...", 0.05))
+
+                    def on_progress(ratio: float) -> None:
+                        self.after(
+                            0,
+                            lambda r=ratio: self._set_progress(
+                                f"Скачивание обновления... {int(r * 100)}%",
+                                0.05 + r * 0.9,
+                            ),
                         )
+
+                    try:
+                        installer = download_verified_installer(
+                            setup_url=result.setup_url,
+                            expected_sha256=result.sha256,
+                            version=result.latest_version,
+                            on_progress=on_progress,
+                        )
+                    except UpdateCheckError as exc:
+                        message = str(exc)
+                        self.after(0, lambda m=message: self._log(m))
+                        self.after(0, lambda m=message: messagebox.showerror("Обновление", m))
+                        return
+
+                    self.after(0, lambda: self._set_progress("Проверка завершена", 1.0))
+                    self.after(0, lambda: self._log(f"Установщик проверен: {installer.name}"))
+
+                    def launch() -> None:
+                        try:
+                            os.startfile(str(installer))  # noqa: S606 — verified local Setup.exe
+                            self._log("Запущен проверенный установщик.")
+                        except OSError as exc:
+                            messagebox.showerror(
+                                "Обновление",
+                                f"Файл проверен, но не удалось открыть установщик:\n{exc}\n\n"
+                                f"Откройте вручную:\n{installer}",
+                            )
+
+                    self.after(0, launch)
+
+                self._run_async(download_task)
 
             self.after(0, ask_download)
 
@@ -718,7 +837,10 @@ class RestoreIosApp(ctk.CTk):
         return filtered
 
     def _schedule_card_reveal(self, card: ctk.CTkFrame, index: int, token: int) -> None:
-        delay = index * STAGGER_DELAY
+        # For small catalogs keep light stagger; for large lists show instantly.
+        if index > 12:
+            return
+        delay = min(index, 8) * 20
 
         def start() -> None:
             if token != self._catalog_anim_token:
@@ -729,7 +851,7 @@ class RestoreIosApp(ctk.CTk):
                 target_fg=THEME["glass"],
                 target_border=THEME["glass_border"],
                 bg_color=THEME["bg"],
-                duration_ms=DURATION_NORMAL,
+                duration_ms=DURATION_FAST,
             )
 
         self.after(delay, start)
@@ -744,6 +866,7 @@ class RestoreIosApp(ctk.CTk):
             normal_border=THEME["glass_border"],
             hover_border=THEME["glass_border_bright"],
             is_selected=lambda cid=card_id: bool(self.selected_app and self.selected_app.id == cid),
+            duration_ms=DURATION_FAST,
         )
 
     def _refresh_app_list(self) -> None:
@@ -754,29 +877,40 @@ class RestoreIosApp(ctk.CTk):
         for child in self.app_list.winfo_children():
             child.destroy()
         self._app_rows.clear()
+        self._icon_refs.clear()
         self._update_catalog_header()
 
-        skeleton_count = 6 if self._catalog_view == "root" else 4
-        for index in range(skeleton_count):
-            row, col = divmod(index, 2)
-            skeleton_card(self.app_list, row=row, col=col)
+        # Instant populate for Banks / bank apps — skeleton caused perceived freeze.
+        # Keep a short skeleton only on cold root load with many general apps.
+        use_skeleton = self._catalog_view == "root" and not getattr(self, "_catalog_ready", False)
+        if use_skeleton:
+            for index in range(4):
+                row, col = divmod(index, 2)
+                skeleton_card(self.app_list, row=row, col=col)
 
-        def populate() -> None:
-            if token != self._catalog_anim_token:
-                return
-            for child in self.app_list.winfo_children():
-                child.destroy()
-            self._app_rows.clear()
-            self._populate_catalog_cards(token)
+            def populate() -> None:
+                if token != self._catalog_anim_token:
+                    return
+                for child in self.app_list.winfo_children():
+                    child.destroy()
+                self._app_rows.clear()
+                self._populate_catalog_cards(token)
+                self._catalog_ready = True
 
-        self.after(160, populate)
+            self.after(80, populate)
+            return
+
+        self._populate_catalog_cards(token)
+        self._catalog_ready = True
 
     def _populate_catalog_cards(self, token: int) -> None:
         cards: list[ctk.CTkFrame] = []
 
         if self._catalog_view == "banks":
-            for index, group in enumerate(self.config_manager.list_bank_groups()):
-                count = self.config_manager.banking_app_counts().get(group.id, 0)
+            counts = self.config_manager.banking_app_counts()
+            groups = [group for group in BANK_GROUPS if counts.get(group.id, 0) > 0]
+            for index, group in enumerate(groups):
+                count = counts.get(group.id, 0)
                 row, col = divmod(index, 2)
                 cards.append(self._create_bank_card(group, count, row, col))
         elif self._catalog_view == "bank" and self._catalog_bank_group:
@@ -799,9 +933,8 @@ class RestoreIosApp(ctk.CTk):
                         hint="Загляните позже — каталог пополняется.",
                     )
             else:
-                for index, app in enumerate(apps):
-                    row, col = divmod(index, 2)
-                    cards.append(self._create_app_card(app, row, col))
+                self._populate_cards_incremental(apps, token)
+                return
         else:
             items = sorted(
                 self.config_manager.list_general_apps(),
@@ -811,7 +944,7 @@ class RestoreIosApp(ctk.CTk):
                 row, col = divmod(index, 2)
                 cards.append(self._create_app_card(app, row, col))
             row, col = divmod(len(items), 2)
-            bank_count = len(self.config_manager.list_bank_groups())
+            bank_count = len(self.config_manager.banking_app_counts())
             cards.append(self._create_folder_card(BANKS_FOLDER_TITLE, row, col, bank_count))
 
         for index, card in enumerate(cards):
@@ -819,6 +952,26 @@ class RestoreIosApp(ctk.CTk):
 
         if self.selected_app and self.selected_app.id in self._app_rows:
             self._highlight_card(self.selected_app.id)
+
+    def _populate_cards_incremental(self, apps: list[AppEntry], token: int) -> None:
+        """Create app cards in batches so the UI stays responsive for large banks."""
+        batch_size = 6
+        total = len(apps)
+
+        def add_batch(start: int) -> None:
+            if token != self._catalog_anim_token:
+                return
+            end = min(start + batch_size, total)
+            for index in range(start, end):
+                row, col = divmod(index, 2)
+                card = self._create_app_card(apps[index], row, col)
+                self._schedule_card_reveal(card, index, token)
+            if end < total:
+                self.after(1, lambda: add_batch(end))
+            elif self.selected_app and self.selected_app.id in self._app_rows:
+                self._highlight_card(self.selected_app.id)
+
+        add_batch(0)
 
     def _bind_click(self, widget: tk.Misc, callback: Callable[[], None]) -> None:
         widget.bind("<Button-1>", lambda _e: callback())
@@ -1218,6 +1371,24 @@ class RestoreIosApp(ctk.CTk):
 
 def main() -> None:
     ensure_app_dirs()
+    from single_instance import acquire_single_instance_lock
+
+    if not acquire_single_instance_lock():
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showwarning(
+                "GROMOV Restore+",
+                "Приложение уже запущено.\nЗакройте другое окно и попробуйте снова.",
+            )
+            root.destroy()
+        except Exception:
+            pass
+        return
+
     app = RestoreIosApp()
     app.mainloop()
 

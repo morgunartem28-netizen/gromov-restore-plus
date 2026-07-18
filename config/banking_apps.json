@@ -11,7 +11,8 @@
       "maskTitle": "Семейный Онлайн",
       "released": "2026-06-23",
       "removed": "2026-06-24",
-      "description": "СберБанк Онлайн"
+      "description": "СберБанк Онлайн",
+      "iconFile": "sber-family-online.png"
     },
     {
       "id": "sber-finansy-online",
@@ -21,7 +22,8 @@
       "appId": 6749261529,
       "maskTitle": "Финансы Онлайн",
       "released": "2025-12-01",
-      "description": "СберБанк Онлайн"
+      "description": "СберБанк Онлайн",
+      "iconFile": "sber-finansy-online.png"
     },
     {
       "id": "sber-sbol",
@@ -30,7 +32,8 @@
       "bundleId": "",
       "appId": 1631810724,
       "maskTitle": "СБОЛ",
-      "description": "СберБанк Онлайн"
+      "description": "СберБанк Онлайн",
+      "iconFile": "sber-sbol.png"
     },
     {
       "id": "sber-byudzhet-online",
@@ -40,7 +43,8 @@
       "appId": 6499320220,
       "maskTitle": "Бюджет Онлайн",
       "released": "2024-10-01",
-      "description": "СберБанк Онлайн"
+      "description": "СберБанк Онлайн",
+      "iconFile": "sber-byudzhet-online.png"
     },
     {
       "id": "sber-uchet-online",
@@ -49,7 +53,8 @@
       "bundleId": "",
       "appId": 6473541769,
       "maskTitle": "Учёт Онлайн",
-      "description": "СберБанк Онлайн"
+      "description": "СберБанк Онлайн",
+      "iconFile": "sber-uchet-online.png"
     },
     {
       "id": "tbank-toastmas",
@@ -59,7 +64,8 @@
       "appId": 6774629936,
       "maskTitle": "Toastmas",
       "released": "2026-06-23",
-      "description": "Т-Банк"
+      "description": "Т-Банк",
+      "iconFile": "tbank-toastmas.png"
     },
     {
       "id": "tbank-drive-transit",
@@ -70,7 +76,8 @@
       "maskTitle": "Drive Transit",
       "released": "2026-04-01",
       "removed": "2026-04-21",
-      "description": "Т-Банк"
+      "description": "Т-Банк",
+      "iconFile": "tbank-drive-transit.png"
     },
     {
       "id": "alfa-apgreyd",
@@ -80,7 +87,8 @@
       "appId": 6774584229,
       "maskTitle": "Апгрейд — Умный Помощник",
       "released": "2026-06-17",
-      "description": "Альфа-Банк"
+      "description": "Альфа-Банк",
+      "iconFile": "alfa-apgreyd.png"
     },
     {
       "id": "alfa-holder",
@@ -90,7 +98,8 @@
       "appId": 6764576497,
       "maskTitle": "Холдер",
       "released": "2026-05-01",
-      "description": "Альфа-Банк"
+      "description": "Альфа-Банк",
+      "iconFile": "alfa-holder.png"
     },
     {
       "id": "alfa-dengi-vsem",
@@ -99,7 +108,8 @@
       "bundleId": "",
       "appId": 6444695749,
       "maskTitle": "Деньги всем",
-      "description": "Альфа-Банк"
+      "description": "Альфа-Банк",
+      "iconFile": "alfa-dengi-vsem.png"
     },
     {
       "id": "alfa-a-klyuch",
@@ -108,7 +118,8 @@
       "bundleId": "",
       "appId": 6746730236,
       "maskTitle": "А-Ключ",
-      "description": "Альфа-Банк"
+      "description": "Альфа-Банк",
+      "iconFile": "alfa-a-klyuch.png"
     },
     {
       "id": "sovcom-skb",
@@ -119,7 +130,8 @@
       "maskTitle": "СКБ. Скидки. Купоны. Бонусы",
       "released": "2026-06-30",
       "removed": "2026-06-30",
-      "description": "Совкомбанк / Халва"
+      "description": "Совкомбанк / Халва",
+      "iconFile": "sovcom-skb.png"
     },
     {
       "id": "sovcom-omp",
@@ -129,7 +141,8 @@
       "appId": 6762749774,
       "maskTitle": "ОМП — Организация Мероприятий",
       "released": "2026-05-26",
-      "description": "Совкомбанк / Халва"
+      "description": "Совкомбанк / Халва",
+      "iconFile": "sovcom-omp.png"
     },
     {
       "id": "sovcom-tratium",
@@ -139,7 +152,8 @@
       "appId": 6748080126,
       "maskTitle": "Тратиум",
       "released": "2025-08-01",
-      "description": "Совкомбанк / Халва"
+      "description": "Совкомбанк / Халва",
+      "iconFile": "sovcom-tratium.png"
     },
     {
       "id": "sovcom-sravni",
@@ -149,7 +163,8 @@
       "appId": 6755602284,
       "maskTitle": "Сравни — сервисы, магазины",
       "released": "2025-12-01",
-      "description": "Совкомбанк / Халва"
+      "description": "Совкомбанк / Халва",
+      "iconFile": "sovcom-sravni.png"
     },
     {
       "id": "sovcom-moy-byudzhet-plus",
@@ -158,7 +173,8 @@
       "bundleId": "",
       "appId": 6743214681,
       "maskTitle": "Мой Бюджет+",
-      "description": "Совкомбанк / Халва"
+      "description": "Совкомбанк / Халва",
+      "iconFile": "sovcom-moy-byudzhet-plus.png"
     },
     {
       "id": "sovcom-esche-karty-plus",
@@ -167,7 +183,8 @@
       "bundleId": "",
       "appId": 6737838839,
       "maskTitle": "Еще карты+",
-      "description": "Совкомбанк / Халва"
+      "description": "Совкомбанк / Халва",
+      "iconFile": "sovcom-esche-karty-plus.png"
     },
     {
       "id": "gpb-digital-safe",
@@ -177,7 +194,8 @@
       "appId": 6755891115,
       "maskTitle": "Цифровой сейф",
       "released": "2026-04-13",
-      "description": "Газпромбанк"
+      "description": "Газпромбанк",
+      "iconFile": "gpb-digital-safe.png"
     },
     {
       "id": "psb-chaynaya-ceremoniya",
@@ -187,7 +205,8 @@
       "appId": 6754700095,
       "maskTitle": "Чайная церемония",
       "released": "2026-04-24",
-      "description": "ПСБ"
+      "description": "ПСБ",
+      "iconFile": "psb-chaynaya-ceremoniya.png"
     },
     {
       "id": "vtb-sirius",
@@ -197,7 +216,8 @@
       "appId": 6749962031,
       "maskTitle": "Сириус",
       "released": "2026-06-05",
-      "description": "ВТБ Онлайн"
+      "description": "ВТБ Онлайн",
+      "iconFile": "vtb-sirius.png"
     },
     {
       "id": "mts-bank",
@@ -205,7 +225,8 @@
       "bankGroup": "mts",
       "bundleId": "",
       "appId": 1184367593,
-      "description": "МТС Банк"
+      "description": "МТС Банк",
+      "iconFile": "mts-bank.png"
     },
     {
       "id": "mts-dom-yogi",
@@ -214,7 +235,8 @@
       "bundleId": "",
       "appId": 6745097862,
       "maskTitle": "Дом йоги",
-      "description": "МТС Банк"
+      "description": "МТС Банк",
+      "iconFile": "mts-dom-yogi.png"
     },
     {
       "id": "mts-kofe-v-karmane",
@@ -223,7 +245,8 @@
       "bundleId": "",
       "appId": 6744692203,
       "maskTitle": "Кофе в Кармане",
-      "description": "МТС Банк"
+      "description": "МТС Банк",
+      "iconFile": "mts-kofe-v-karmane.png"
     }
   ]
 }

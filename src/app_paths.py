@@ -26,6 +26,11 @@ def resource_dir() -> Path:
 
 
 def data_dir() -> Path:
+    """User data always lives in LocalAppData when frozen.
+
+    Independent of install folder (Program Files, D:\\Apps, portable path, etc.),
+    so IPA cache / logs / updates never break if the user moves the .exe.
+    """
     if is_frozen():
         base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "GROMOV" / "RestorePlus"
         base.mkdir(parents=True, exist_ok=True)

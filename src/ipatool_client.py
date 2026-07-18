@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from app_paths import data_dir, install_dir, tools_dir
 from ipa_utils import cleanup_download_artifacts, is_valid_ipa, read_ipa_bundle_id
+from security_utils import protect_sensitive_file, protect_sensitive_tree, redact_secrets
 from subprocess_utils import popen_hidden, run_hidden
 
 
@@ -38,6 +40,28 @@ class IpatoolClient:
         self.ipatool_path = ipatool_path or self._resolve_ipatool()
         self.log_path = self.data_root / "ipatool.log"
         self.keychain_pass_path = self.data_root / "keychain.pass"
+        if self.keychain_pass_path.exists():
+            protect_sensitive_file(self.keychain_pass_path)
+        self._scrub_legacy_secret_logs()
+
+    @staticmethod
+    def _ipatool_home() -> Path:
+        return Path.home() / ".ipatool"
+
+    def _scrub_legacy_secret_logs(self) -> None:
+        """Drop historical logs that may contain plaintext --password values."""
+        try:
+            if not self.log_path.exists():
+                return
+            text = self.log_path.read_text(encoding="utf-8", errors="replace")
+            if re.search(r"(?i)--password\s+(?!\*\*\*)\S+", text):
+                self.log_path.write_text(
+                    "[log cleared: previous entries may have contained secrets]\n",
+                    encoding="utf-8",
+                )
+                protect_sensitive_file(self.log_path)
+        except OSError:
+            pass
 
     def _resolve_ipatool(self) -> str:
         from_env = os.environ.get("IPATOOL_PATH")
@@ -60,10 +84,37 @@ class IpatoolClient:
 
     def _keychain_passphrase(self) -> str:
         if self.keychain_pass_path.exists():
-            return self.keychain_pass_path.read_text(encoding="utf-8").strip()
+            passphrase = self.keychain_pass_path.read_text(encoding="utf-8").strip()
+            if passphrase:
+                protect_sensitive_file(self.keychain_pass_path)
+                return passphrase
         passphrase = secrets.token_urlsafe(24)
         self.keychain_pass_path.write_text(passphrase, encoding="utf-8")
+        protect_sensitive_file(self.keychain_pass_path)
         return passphrase
+
+    def clear_local_session_secrets(self) -> None:
+        """Remove local passphrase and ipatool session cookies after logout."""
+        try:
+            if self.keychain_pass_path.exists():
+                self.keychain_pass_path.unlink()
+        except OSError:
+            pass
+
+        ipatool_home = self._ipatool_home()
+        cookies = ipatool_home / "cookies"
+        try:
+            if cookies.exists():
+                cookies.unlink()
+        except OSError:
+            pass
+        protect_sensitive_tree(ipatool_home)
+
+    def harden_session_store(self) -> None:
+        """Best-effort ACL lockdown for ~/.ipatool after login."""
+        protect_sensitive_tree(self._ipatool_home())
+        if self.keychain_pass_path.exists():
+            protect_sensitive_file(self.keychain_pass_path)
 
     def _log_run(self, args: list[str], completed: subprocess.CompletedProcess[str]) -> None:
         safe_args = []
@@ -83,8 +134,8 @@ class IpatoolClient:
         entry = (
             f"\n[{stamp}] {' '.join(safe_args)}\n"
             f"exit={completed.returncode}\n"
-            f"stdout={completed.stdout}\n"
-            f"stderr={completed.stderr}\n"
+            f"stdout={redact_secrets(completed.stdout or '')}\n"
+            f"stderr={redact_secrets(completed.stderr or '')}\n"
         )
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(entry)
@@ -144,6 +195,7 @@ class IpatoolClient:
 
     def auth_logout(self) -> None:
         completed = self._run(["auth", "revoke"])
+        self.clear_local_session_secrets()
         if completed.returncode != 0:
             raise IpatoolError(self.format_error(self._extract_error(completed)))
 
@@ -161,6 +213,7 @@ class IpatoolClient:
                 raise IpatoolTwoFactorRequired(
                     "Код подтверждения отправлен на iPhone или Mac. Введите 6 цифр и нажмите «Войти» снова."
                 )
+            self.harden_session_store()
             if completed.stdout and completed.stdout.strip():
                 try:
                     payload = json.loads(completed.stdout)
@@ -302,10 +355,26 @@ class IpatoolClient:
 
         payload = self._parse_json(completed)
         downloaded = payload.get("path") or payload.get("output") or payload.get("file")
-        if downloaded and Path(downloaded).exists():
-            path = Path(downloaded)
-        else:
-            candidates = sorted(output_dir.glob("*.ipa"), key=lambda path: path.stat().st_mtime, reverse=True)
+        path: Path | None = None
+        if downloaded:
+            candidate = Path(downloaded)
+            try:
+                resolved = candidate.resolve()
+                output_resolved = output_dir.resolve()
+                if resolved.is_file() and resolved.parent == output_resolved:
+                    path = resolved
+            except OSError:
+                path = None
+        if path is None:
+            patterns = (f"{app_id}_*.ipa", f"*_{app_id}_*.ipa")
+            candidates: list[Path] = []
+            for pattern in patterns:
+                candidates.extend(output_dir.glob(pattern))
+            candidates = sorted(
+                {item.resolve() for item in candidates if item.is_file()},
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
             if not candidates:
                 raise IpatoolError("IPA скачан, но путь к файлу не найден.")
             path = candidates[0]

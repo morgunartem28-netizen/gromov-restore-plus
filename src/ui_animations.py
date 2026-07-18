@@ -69,7 +69,7 @@ class AnimationRunner:
         on_frame: Callable[[float], None],
         on_complete: Callable[[], None] | None = None,
         easing: Callable[[float], float] = ease_out_cubic,
-        interval_ms: int = 16,
+        interval_ms: int = 24,
     ) -> None:
         self.cancel(key)
         token = self._next_token(key)
@@ -139,6 +139,7 @@ def bind_smooth_hover(
     normal_border: str,
     hover_border: str,
     is_selected: Callable[[], bool],
+    duration_ms: int = DURATION_FAST,
 ) -> None:
     def on_enter(_event: object) -> None:
         if is_selected():
@@ -150,7 +151,7 @@ def bind_smooth_hover(
             to_fg=hover_fg,
             from_border=card.cget("border_color") if isinstance(card.cget("border_color"), str) else normal_border,
             to_border=hover_border,
-            duration_ms=DURATION_FAST,
+            duration_ms=duration_ms,
         )
 
     def on_leave(_event: object) -> None:
@@ -164,7 +165,7 @@ def bind_smooth_hover(
             to_fg=normal_fg,
             from_border=card.cget("border_color") if isinstance(card.cget("border_color"), str) else hover_border,
             to_border=normal_border,
-            duration_ms=DURATION_FAST,
+            duration_ms=duration_ms,
         )
 
     card.bind("<Enter>", on_enter)

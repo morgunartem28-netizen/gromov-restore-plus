@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import plistlib
+import time
 import zipfile
 from pathlib import Path
+
+# IPA cache lives under data_dir()/downloads (AppData), not next to the .exe —
+# so a custom install folder cannot break cleanup or leave orphan caches.
+IPA_CACHE_MAX_AGE_DAYS = 7
 
 # Старые bundle ID в каталоге, которые всё ещё относятся к тому же приложению.
 _BUNDLE_EQUIVALENTS: tuple[frozenset[str], ...] = (
@@ -66,7 +71,8 @@ def is_valid_ipa(path: Path, *, expected_bundle_id: str | None = None) -> bool:
                 return False
             if expected_bundle_id:
                 bundle_id = read_ipa_bundle_id(path)
-                if bundle_id and not bundle_id_matches(expected_bundle_id, bundle_id):
+                # Fail closed: if we cannot read CFBundleIdentifier, reject the IPA.
+                if not bundle_id or not bundle_id_matches(expected_bundle_id, bundle_id):
                     return False
     except (zipfile.BadZipFile, OSError, KeyError):
         return False
@@ -105,4 +111,63 @@ def cleanup_download_artifacts(downloads_dir: Path, app_id: int) -> int:
             except OSError:
                 pass
 
+    return removed
+
+
+def purge_stale_ipa_cache(
+    downloads_root: Path,
+    *,
+    max_age_days: int = IPA_CACHE_MAX_AGE_DAYS,
+) -> int:
+    """Delete *.ipa / *.ipa.tmp older than max_age_days. Never raises."""
+    removed = 0
+    try:
+        if not downloads_root.is_dir():
+            return 0
+        cutoff = time.time() - max(1, max_age_days) * 86400
+        for path in downloads_root.rglob("*"):
+            try:
+                if not path.is_file():
+                    continue
+                name = path.name.lower()
+                if not (name.endswith(".ipa") or name.endswith(".ipa.tmp")):
+                    continue
+                if path.stat().st_mtime >= cutoff:
+                    continue
+                path.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                continue
+        # Remove empty account folders left behind.
+        for path in sorted(downloads_root.rglob("*"), reverse=True):
+            try:
+                if path.is_dir() and not any(path.iterdir()):
+                    path.rmdir()
+            except OSError:
+                continue
+    except OSError:
+        return removed
+    return removed
+
+
+def purge_stale_staging(
+    staging_dir: Path,
+    *,
+    max_age_days: int = 1,
+) -> int:
+    """Best-effort cleanup of leftover staged IPA copies in %TEMP%."""
+    removed = 0
+    try:
+        if not staging_dir.is_dir():
+            return 0
+        cutoff = time.time() - max(1, max_age_days) * 86400
+        for path in staging_dir.glob("*.ipa"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+                    removed += 1
+            except OSError:
+                continue
+    except OSError:
+        return removed
     return removed

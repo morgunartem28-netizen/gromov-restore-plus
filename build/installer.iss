@@ -1,7 +1,7 @@
 ﻿; GROMOV Restore+ — installer script for Inno Setup 6
 
 #define MyAppName "GROMOV Restore+"
-#define MyAppVersion "1.1.4"
+#define MyAppVersion "1.1.5"
 #define MyAppPublisher "GROMOV"
 #define MyAppExeName "GROMOV-RestorePlus.exe"
 
@@ -29,19 +29,21 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Дополнительно:"; Flags: checkedonce
 
 [Files]
+; Entire PyInstaller tree — must already contain tools\ and drivers\ (build_release.ps1 copies them).
 Source: "..\dist\GROMOV-RestorePlus\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; tools/ and drivers/ must exist in ..\dist\GROMOV-RestorePlus before ISCC (see build\build_release.ps1)
-Source: "..\dist\GROMOV-RestorePlus\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\dist\GROMOV-RestorePlus\drivers\*"; DestDir: "{app}\drivers"; Flags: ignoreversion skipifsourcedoesntexist recursesubdirs createallsubdirs
+; Explicit copies so a missing folder fails the build instead of shipping a broken Setup.
+Source: "..\dist\GROMOV-RestorePlus\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\GROMOV-RestorePlus\drivers\*"; DestDir: "{app}\drivers"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\drivers\install_drivers.bat"; WorkingDir: "{app}\drivers"; Description: "Установить драйверы Apple для iPhone"; Flags: postinstall runascurrentuser skipifdoesntexist skipifsilent nowait unchecked
+; bat is required in the package; MSI inside drivers\ are optional (bat falls back to winget/Store).
+Filename: "{app}\drivers\install_drivers.bat"; WorkingDir: "{app}\drivers"; Description: "Установить драйверы Apple для iPhone"; Flags: postinstall runascurrentuser skipifsilent nowait unchecked
 Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: postinstall nowait skipifsilent
 [Messages]
-russian.WelcomeLabel2=Установит GROMOV Restore+ для восстановления приложений App Store на iPhone.%n%nБудут установлены драйверы Apple и все необходимые компоненты.
+russian.WelcomeLabel2=Установит GROMOV Restore+ для восстановления приложений App Store на iPhone.%n%nПри необходимости можно установить драйверы Apple на последнем шаге.
 

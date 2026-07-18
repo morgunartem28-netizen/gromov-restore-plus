@@ -87,10 +87,29 @@ class ConfigManager:
         self.cache_dir = data_dir()
         self.downloads_root = self.cache_dir / "downloads"
         self._apple_account_email: str | None = None
+        self._apps_cache: list[AppEntry] | None = None
+        self._apps_cache_key: tuple[float, float, float] | None = None
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.downloads_root.mkdir(parents=True, exist_ok=True)
         self._ensure_user_config()
         self._migrate_known_app_ids()
+
+    def invalidate_apps_cache(self) -> None:
+        self._apps_cache = None
+        self._apps_cache_key = None
+
+    def _apps_source_key(self) -> tuple[float, float, float]:
+        def mtime(path: Path) -> float:
+            try:
+                return path.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        return (
+            mtime(self.default_apps_path),
+            mtime(self.banking_apps_path),
+            mtime(self.user_apps_path),
+        )
 
     @property
     def apple_account_email(self) -> str | None:
@@ -151,6 +170,7 @@ class ConfigManager:
                 changed = True
         if changed:
             self._write_apps_file(self.user_apps_path, apps)
+            self.invalidate_apps_cache()
 
     def _ensure_user_config(self) -> None:
         if not self.user_apps_path.exists():
@@ -194,8 +214,8 @@ class ConfigManager:
 
     def banking_app_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
-        for app in self.list_banking_apps():
-            if app.bankGroup:
+        for app in self.list_apps():
+            if app.is_banking and app.bankGroup:
                 counts[app.bankGroup] = counts.get(app.bankGroup, 0) + 1
         return counts
 
@@ -206,10 +226,14 @@ class ConfigManager:
         return None
 
     def list_banking_apps_for_group(self, bank_group: str) -> list[AppEntry]:
-        apps = [app for app in self.list_banking_apps() if app.bankGroup == bank_group]
+        apps = [app for app in self.list_apps() if app.is_banking and app.bankGroup == bank_group]
         return ConfigManager.sort_banking_apps(apps)
 
     def list_apps(self) -> list[AppEntry]:
+        key = self._apps_source_key()
+        if self._apps_cache is not None and self._apps_cache_key == key:
+            return list(self._apps_cache)
+
         default_apps = {app.id: app for app in self._read_apps_file(self.default_apps_path)}
         banking_apps = {app.id: app for app in self._read_banking_apps()}
         user_apps = self._read_apps_file(self.user_apps_path)
@@ -234,7 +258,10 @@ class ConfigManager:
                 )
             else:
                 merged[app.id] = app
-        return list(merged.values())
+        apps = list(merged.values())
+        self._apps_cache = apps
+        self._apps_cache_key = key
+        return list(apps)
 
     @staticmethod
     def sort_banking_apps(apps: list[AppEntry]) -> list[AppEntry]:

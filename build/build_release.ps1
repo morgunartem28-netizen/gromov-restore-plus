@@ -108,16 +108,22 @@ function Copy-ToolsAndDriversToDist {
         Write-Host "Copied $name -> dist\tools\$name"
     }
 
-    if (Test-Path $DriversRoot) {
-        Get-ChildItem -Path $DriversRoot -File | ForEach-Object {
-            Copy-Item $_.FullName (Join-Path $distDrivers $_.Name) -Force
-            Write-Host "Copied driver file -> dist\drivers\$($_.Name)"
-        }
+    $batSrc = Join-Path $DriversRoot "install_drivers.bat"
+    if (-not (Test-Path $batSrc)) {
+        throw "Missing drivers\install_drivers.bat — Setup would fail with error 267 on driver step."
     }
 
-    $bat = Join-Path $distDrivers "install_drivers.bat"
-    if (-not (Test-Path $bat)) {
-        Write-Warning "dist\drivers\install_drivers.bat missing; Inno [Run] will skip driver install (skipifdoesntexist)"
+    # Always copy entire drivers folder (bat + optional MSI).
+    Copy-Item -Path (Join-Path $DriversRoot "*") -Destination $distDrivers -Recurse -Force
+    Get-ChildItem $distDrivers -File | ForEach-Object {
+        Write-Host "Copied driver file -> dist\drivers\$($_.Name) ($($_.Length) bytes)"
+    }
+
+    $msiCount = @(Get-ChildItem $distDrivers -Filter "*.msi" -ErrorAction SilentlyContinue).Count
+    if ($msiCount -lt 2) {
+        Write-Warning "Apple MSI not bundled ($msiCount found). install_drivers.bat will fall back to winget / Store."
+    } else {
+        Write-Host "Apple drivers: $msiCount MSI file(s) bundled"
     }
 }
 
@@ -126,7 +132,8 @@ function Assert-DistBeforeInno {
     $required = @(
         (Join-Path $DistRoot "GROMOV-RestorePlus.exe"),
         (Join-Path $DistRoot "tools\ipatool.exe"),
-        (Join-Path $DistRoot "tools\ios.exe")
+        (Join-Path $DistRoot "tools\ios.exe"),
+        (Join-Path $DistRoot "drivers\install_drivers.bat")
     )
     foreach ($p in $required) {
         if (-not (Test-Path $p)) {
@@ -138,11 +145,7 @@ function Assert-DistBeforeInno {
     Get-ChildItem $DistRoot -Directory | ForEach-Object { Write-Host "  $($_.Name)\" }
     Get-ChildItem (Join-Path $DistRoot "tools") -File | ForEach-Object { Write-Host "  tools\$($_.Name) ($($_.Length) bytes)" }
     $drv = Join-Path $DistRoot "drivers"
-    if (Test-Path $drv) {
-        Get-ChildItem $drv -File | ForEach-Object { Write-Host "  drivers\$($_.Name) ($($_.Length) bytes)" }
-    } else {
-        Write-Host "  drivers\ (missing)"
-    }
+    Get-ChildItem $drv -File | ForEach-Object { Write-Host "  drivers\$($_.Name) ($($_.Length) bytes)" }
     Write-Host ""
 }
 
@@ -180,6 +183,28 @@ if ($iscc) {
     & $iscc (Join-Path $root "build\installer.iss")
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup compile failed with exit code $LASTEXITCODE" }
     Write-Host "Installer: dist\GROMOV-RestorePlus-Setup.exe"
+
+    $setup = Join-Path $root "dist\GROMOV-RestorePlus-Setup.exe"
+    if (Test-Path $setup) {
+        $sha = (Get-FileHash -Path $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+        $versionPy = Get-Content (Join-Path $root "src\version.py") -Raw
+        if ($versionPy -match 'APP_VERSION\s*=\s*"([^"]+)"') {
+            $appVersion = $Matches[1]
+        } else {
+            $appVersion = "0.0.0"
+        }
+        $manifest = [ordered]@{
+            version   = $appVersion
+            setup_url = "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/$appVersion/GROMOV-RestorePlus-Setup.exe"
+            sha256    = $sha
+            notes     = "Сборка $appVersion. SHA256 установщика записан автоматически."
+        }
+        $manifestPath = Join-Path $root "release\version.json"
+        $json = ($manifest | ConvertTo-Json -Depth 5)
+        [System.IO.File]::WriteAllText($manifestPath, $json, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "Update manifest: $manifestPath"
+        Write-Host "Setup SHA256: $sha"
+    }
 } else {
     Write-Host "Inno Setup not found - portable ZIP created instead."
 }

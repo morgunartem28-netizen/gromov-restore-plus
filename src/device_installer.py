@@ -45,10 +45,22 @@ class DeviceInstaller:
 
     def _stage_ipa(self, ipa_path: Path) -> Path:
         """go-ios on Windows ломается на путях с кириллицей — копируем во временную ASCII-папку."""
-        safe_name = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in ipa_path.name)
-        staged = self.staging_dir / safe_name
+        safe_stem = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in ipa_path.stem)[:80] or "app"
+        fd, staged_name = tempfile.mkstemp(prefix=f"{safe_stem}_", suffix=".ipa", dir=self.staging_dir)
+        os.close(fd)
+        staged = Path(staged_name)
         shutil.copy2(ipa_path, staged)
         return staged
+
+    @staticmethod
+    def _cleanup_staged(staged: Path | None) -> None:
+        if staged is None:
+            return
+        try:
+            if staged.exists():
+                staged.unlink()
+        except OSError:
+            pass
 
     def backend_name(self) -> str:
         if self.go_ios_path:
@@ -112,100 +124,105 @@ class DeviceInstaller:
         if on_progress:
             on_progress(0.72, "Подготовка файла для установки...")
         install_path = self._stage_ipa(ipa_path)
-        if not is_valid_ipa(install_path, expected_bundle_id=expected_bundle_id):
-            raise DeviceInstallerError(
-                "Не удалось подготовить IPA для установки — файл повреждён.\n"
-                "Скачайте приложение заново."
-            )
-        log_path = data_dir() / "install.log"
+        try:
+            if not is_valid_ipa(install_path, expected_bundle_id=expected_bundle_id):
+                raise DeviceInstallerError(
+                    "Не удалось подготовить IPA для установки — файл повреждён.\n"
+                    "Скачайте приложение заново."
+                )
+            log_path = data_dir() / "install.log"
 
-        if self.go_ios_path:
-            command = [self.go_ios_path, "install", "--path", str(install_path), "--verbose"]
-            install_step = 0.72
+            if self.go_ios_path:
+                command = [self.go_ios_path, "install", "--path", str(install_path), "--verbose"]
+                install_step = 0.72
 
-            def report(step: float, text: str) -> None:
-                nonlocal install_step
-                install_step = max(install_step, step)
+                def report(step: float, text: str) -> None:
+                    nonlocal install_step
+                    install_step = max(install_step, step)
+                    if on_progress:
+                        on_progress(install_step, text)
+
                 if on_progress:
-                    on_progress(install_step, text)
-
-            if on_progress:
-                report(0.75, "Установка на iPhone...")
-                proc = popen_hidden(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                output_lines: list[str] = []
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    output_lines.append(line)
-                    if "%" in line or "install" in line.lower() or "upload" in line.lower():
-                        report(min(0.94, install_step + 0.01), "Передача на iPhone...")
-                completed = subprocess.CompletedProcess(command, proc.wait(), stdout="".join(output_lines), stderr="")
-            else:
-                completed = run_hidden(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-            output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
-            with log_path.open("a", encoding="utf-8") as handle:
-                handle.write(f"\n--- install {install_path} ---\nexit={completed.returncode}\n{output}\n")
-
-            if on_progress:
-                report(0.98, "Завершение установки...")
-
-            if completed.returncode != 0:
-                hint = (
-                    "\n\nЧто проверить на iPhone:\n"
-                    "1. Кабель USB надёжно подключён\n"
-                    "2. Нажато «Доверять этому компьютеру»\n"
-                    "3. iOS 17+: Настройки → Конфиденциальность → Режим разработчика (включить)\n"
-                    "4. Установлены Apple Devices или iTunes на ПК"
-                )
-                if "tunnel" in output.lower() or "agent is not running" in output.lower():
-                    hint += (
-                        "\n5. Для iOS 17+ откройте отдельный терминал и выполните:\n"
-                        "   tools\\ios.exe tunnel start\n"
-                        "   затем снова нажмите «Скачать и установить»"
+                    report(0.75, "Установка на iPhone...")
+                    proc = popen_hidden(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
                     )
-                if "No such file or directory" in output or "PublicStaging" in output:
-                    hint += "\n\nПуть к IPA исправлен — попробуйте установку ещё раз."
-                if "EOF" in output:
-                    hint += (
-                        "\n\nСоединение оборвалось при передаче файла (~400 МБ).\n"
-                        "Используйте оригинальный кабель, не отключайте iPhone 2–3 минуты."
+                    output_lines: list[str] = []
+                    assert proc.stdout is not None
+                    for line in proc.stdout:
+                        output_lines.append(line)
+                        if "%" in line or "install" in line.lower() or "upload" in line.lower():
+                            report(min(0.94, install_step + 0.01), "Передача на iPhone...")
+                    completed = subprocess.CompletedProcess(
+                        command, proc.wait(), stdout="".join(output_lines), stderr=""
                     )
-                if "zip not a valid" in output.lower() or "not a valid zip" in output.lower():
-                    hint += (
-                        "\n\nФайл IPA повреждён. Приложение скачает его заново при следующей попытке."
+                else:
+                    completed = run_hidden(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
                     )
-                raise DeviceInstallerError(
-                    "Установка на iPhone не удалась."
-                    + hint
-                    + "\n\nТехнические детали:\n"
-                    + output.strip()
-                )
-            return "Приложение установлено на iPhone. Проверьте домашний экран."
+                output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
+                with log_path.open("a", encoding="utf-8") as handle:
+                    handle.write(f"\n--- install {install_path.name} ---\nexit={completed.returncode}\n{output}\n")
 
-        if self.pymobiledevice3_available:
-            command = [sys.executable, "-m", "pymobiledevice3", "apps", "install", str(install_path)]
-            completed = run_hidden(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
-            output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
-            if completed.returncode != 0:
-                raise DeviceInstallerError(
-                    "pymobiledevice3 не смог установить IPA.\n"
-                    "Проверьте USB, «Доверять компьютеру» и Apple Devices/iTunes.\n\n"
-                    + output.strip()
-                )
-            return output.strip() or "Установка завершена."
+                if on_progress:
+                    report(0.98, "Завершение установки...")
 
-        raise DeviceInstallerError(
-            "Нет инструмента для установки. Положите tools/ios.exe (go-ios) или установите pymobiledevice3."
-        )
+                if completed.returncode != 0:
+                    hint = (
+                        "\n\nЧто проверить на iPhone:\n"
+                        "1. Кабель USB надёжно подключён\n"
+                        "2. Нажато «Доверять этому компьютеру»\n"
+                        "3. iOS 17+: Настройки → Конфиденциальность → Режим разработчика (включить)\n"
+                        "4. Установлены Apple Devices или iTunes на ПК"
+                    )
+                    if "tunnel" in output.lower() or "agent is not running" in output.lower():
+                        hint += (
+                            "\n5. Для iOS 17+ откройте отдельный терминал и выполните:\n"
+                            "   tools\\ios.exe tunnel start\n"
+                            "   затем снова нажмите «Скачать и установить»"
+                        )
+                    if "No such file or directory" in output or "PublicStaging" in output:
+                        hint += "\n\nПуть к IPA исправлен — попробуйте установку ещё раз."
+                    if "EOF" in output:
+                        hint += (
+                            "\n\nСоединение оборвалось при передаче файла (~400 МБ).\n"
+                            "Используйте оригинальный кабель, не отключайте iPhone 2–3 минуты."
+                        )
+                    if "zip not a valid" in output.lower() or "not a valid zip" in output.lower():
+                        hint += (
+                            "\n\nФайл IPA повреждён. Приложение скачает его заново при следующей попытке."
+                        )
+                    raise DeviceInstallerError(
+                        "Установка на iPhone не удалась."
+                        + hint
+                        + "\n\nТехнические детали:\n"
+                        + output.strip()
+                    )
+                return "Приложение установлено на iPhone. Проверьте домашний экран."
+
+            if self.pymobiledevice3_available:
+                command = [sys.executable, "-m", "pymobiledevice3", "apps", "install", str(install_path)]
+                completed = run_hidden(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
+                if completed.returncode != 0:
+                    raise DeviceInstallerError(
+                        "pymobiledevice3 не смог установить IPA.\n"
+                        "Проверьте USB, «Доверять компьютеру» и Apple Devices/iTunes.\n\n"
+                        + output.strip()
+                    )
+                return output.strip() or "Установка завершена."
+
+            raise DeviceInstallerError(
+                "Нет инструмента для установки. Положите tools/ios.exe (go-ios) или установите pymobiledevice3."
+            )
+        finally:
+            self._cleanup_staged(install_path)
