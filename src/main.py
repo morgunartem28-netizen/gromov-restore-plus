@@ -53,6 +53,7 @@ from ui_animations import (
     reveal_card,
 )
 from update_checker import (
+    GITHUB_RELEASES_LATEST,
     UpdateCheckError,
     UpdateCheckResult,
     check_for_updates,
@@ -1213,9 +1214,9 @@ class RestoreIosApp(ctk.CTk):
         message = (
             f"Доступна новая версия {result.latest_version}.\n"
             f"Текущая версия: {result.current_version}.{notes}\n\n"
-            "Скачивание открыто в браузере (страница с зеркалами) — установите Setup.\n"
-            "Так надёжнее на разных ПК (антивирус, прокси, блокировка GitHub).\n"
-            "В приложении тоже можно скачать (несколько зеркал + проверка SHA256)."
+            "Скачивание обновления открыто в браузере — установите Setup.\n"
+            "Это надёжнее на разных ПК (антивирус, прокси, блокировка GitHub).\n"
+            "При желании можно скачать внутри приложения (проверка SHA256)."
         )
         self._show_update_action_dialog(
             title="Доступно обновление",
@@ -1229,10 +1230,9 @@ class RestoreIosApp(ctk.CTk):
         )
 
     def _present_update_check_failure(self, message: str) -> None:
-        # Auto-open mirror chooser (jsDelivr) so user is not stuck when GitHub is blocked.
-        page = resolve_browser_download_url(self._last_setup_url)
-        self._log(f"Открыта страница загрузки в браузере:\n{page}")
-        webbrowser.open(page)
+        releases_url = GITHUB_RELEASES_LATEST
+        self._log(f"Открыта страница релизов в браузере:\n{releases_url}")
+        webbrowser.open(releases_url)
         self._toast(
             "Страница загрузки открыта в браузере",
             kind="warning",
@@ -1241,13 +1241,12 @@ class RestoreIosApp(ctk.CTk):
             title="Не удалось проверить обновления",
             message=(
                 f"{message}\n\n"
-                "Проверка из приложения может не пройти, даже если интернет работает "
-                "(блокировка raw.githubusercontent.com / GitHub, TLS антивируса, прокси).\n\n"
-                "Страница со ссылками и зеркалами уже открыта в браузере — "
-                "скачайте Setup оттуда и установите поверх."
+                "Проверка из приложения может не пройти, даже если сайт GitHub "
+                "открывается в браузере (другой путь сети, TLS, блокировка CDN).\n\n"
+                "Страница релизов уже открыта в браузере — скачайте Setup оттуда."
             ),
-            primary_text="Открыть снова в браузере",
-            on_primary=lambda: self._open_update_in_browser(self._last_setup_url),
+            primary_text="Открыть релизы в браузере",
+            on_primary=lambda: webbrowser.open(GITHUB_RELEASES_LATEST),
             secondary_text="Повторить проверку",
             on_secondary=self._check_updates,
             tertiary_text="Закрыть",

@@ -8,6 +8,6 @@
     "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
     "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe"
   ],
-  "sha256": "f445fe2049f64d5d797fbeeeecbf319cd4cfdf718334db9a6cc1d5047cdb3c4d",
-  "notes": "1.2.7: Setup mirrors (GitHub + gh-proxy/ghfast), WinHTTP/PAC, browser mirror page. Old <=1.2.1 with blocked raw: one-time Setup or scripts/silent_update.ps1."
+  "sha256": "2b1f6fb9e6cd9a82a12b86efc52b215facb896578db43d780aa3c33ba5d04324",
+  "notes": "1.2.7: снова скачивание обновления через браузер (как раньше, стабильнее на разных ПК); проверка версии в приложении; загрузка внутри приложения — опционально."
 }
