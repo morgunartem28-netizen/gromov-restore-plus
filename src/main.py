@@ -35,7 +35,6 @@ from theme import (
     empty_state,
     ghost_button,
     glass_frame,
-    is_dark_theme,
     primary_button,
     secondary_button,
     skeleton_card,
@@ -77,10 +76,10 @@ _INSTALL_PHASES = (
 class RestoreIosApp(ctk.CTk):
     def __init__(self) -> None:
         settings = AppSettings()
-        theme_mode = apply_theme(settings.theme_mode)
+        apply_theme("dark")
 
         super().__init__()
-        ctk.set_appearance_mode(theme_mode)
+        ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
         self.title("GROMOV Restore+")
@@ -118,11 +117,6 @@ class RestoreIosApp(ctk.CTk):
         self._version_click_count = 0
         self._toasts: ToastHost | None = None
         self._last_setup_url: str | None = None
-        self._theme_applying = False
-        self._chrome_frames: list[ctk.CTkFrame] = []
-        self._chrome_text_labels: list[tuple[ctk.CTkLabel, str]] = []
-        self._primary_buttons: list[ctk.CTkButton] = []
-        self._secondary_buttons: list[ctk.CTkButton] = []
         self._install_queue = InstallQueue(
             worker=self._queue_worker,
             on_changed=lambda: self.after(0, self._refresh_queue_ui),
@@ -136,7 +130,7 @@ class RestoreIosApp(ctk.CTk):
         self._restore_catalog_state()
         self._refresh_app_list()
         self._render_recent_searches()
-        self.after(50, lambda: apply_glass_window(self, dark=is_dark_theme()))
+        self.after(50, lambda: apply_glass_window(self, dark=True))
         self.after(200, self._startup_checks)
         self.after(300, self._warm_icon_cache)
         self.after(400, self._purge_stale_caches)
@@ -161,7 +155,6 @@ class RestoreIosApp(ctk.CTk):
         header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
         header.grid_columnconfigure(1, weight=1)
         self._header = header
-        self._chrome_frames.append(header)
 
         logo = self.icon_loader.get_logo(52)
         if logo:
@@ -182,7 +175,6 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["silver"],
         )
         brand.pack(side="left")
-        self._chrome_text_labels.append((brand, "silver"))
 
         product = ctk.CTkLabel(
             title_row,
@@ -191,7 +183,6 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["accent"],
         )
         product.pack(side="left")
-        self._chrome_text_labels.append((product, "accent"))
 
         tagline = ctk.CTkLabel(
             title_wrap,
@@ -200,7 +191,6 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["muted"],
         )
         tagline.pack(anchor="w", pady=(6, 0))
-        self._chrome_text_labels.append((tagline, "muted"))
 
         header_actions = ctk.CTkFrame(header, fg_color="transparent")
         header_actions.grid(row=0, column=2, rowspan=2, padx=(0, 20), pady=16, sticky="e")
@@ -214,7 +204,6 @@ class RestoreIosApp(ctk.CTk):
         )
         self.version_label.pack(side="left", padx=(0, 10))
         self.version_label.bind("<Button-1>", self._on_version_click)
-        self._chrome_text_labels.append((self.version_label, "muted"))
 
         self.update_button = secondary_button(
             header_actions,
@@ -225,7 +214,6 @@ class RestoreIosApp(ctk.CTk):
             command=self._check_updates,
         )
         self.update_button.pack(side="left", padx=(0, 8))
-        self._secondary_buttons.append(self.update_button)
 
         self.help_button = primary_button(
             header_actions,
@@ -237,13 +225,11 @@ class RestoreIosApp(ctk.CTk):
             command=self._show_help,
         )
         self.help_button.pack(side="left")
-        self._primary_buttons.append(self.help_button)
 
         sidebar = glass_frame(self, width=290)
         sidebar.grid(row=1, column=0, sticky="nsw", padx=(16, 8), pady=12)
         sidebar.grid_propagate(False)
         self._sidebar = sidebar
-        self._chrome_frames.append(sidebar)
 
         self._section_label(sidebar, "Apple ID")
         self.auth_status_label = ctk.CTkLabel(
@@ -254,7 +240,6 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["muted"],
         )
         self.auth_status_label.pack(anchor="w", padx=16, pady=(0, 10))
-        self._chrome_text_labels.append((self.auth_status_label, "muted"))
 
         self._action_button(sidebar, "Войти в Apple ID", self._login_dialog).pack(fill="x", padx=14, pady=4)
         self._action_button(sidebar, "Проверить вход", self._update_auth_status, secondary=True).pack(
@@ -273,42 +258,11 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["muted"],
         )
         self.readiness_label.pack(anchor="w", padx=16, pady=(0, 10))
-        self._chrome_text_labels.append((self.readiness_label, "muted"))
 
         self._action_button(sidebar, "Проверить iPhone", self._check_device).pack(fill="x", padx=14, pady=4)
         self._action_button(sidebar, "Установить драйверы Apple", self._install_drivers, secondary=True).pack(
             fill="x", padx=14, pady=4
         )
-
-        self._section_label(sidebar, "Тема", top_pad=20)
-        theme_hint = ctk.CTkLabel(
-            sidebar,
-            text="Светлая или тёмная — сохраняется",
-            wraplength=250,
-            justify="left",
-            text_color=THEME["muted"],
-            font=ui_font(12),
-        )
-        theme_hint.pack(anchor="w", padx=16, pady=(0, 8))
-        self._chrome_text_labels.append((theme_hint, "muted"))
-
-        self.theme_segment = ctk.CTkSegmentedButton(
-            sidebar,
-            values=["Светлая", "Тёмная"],
-            command=self._on_theme_segment,
-            font=ui_font(13, weight="bold"),
-            height=36,
-            corner_radius=12,
-            fg_color=THEME["chip"],
-            selected_color=THEME["accent"],
-            selected_hover_color=THEME["accent_hover"],
-            unselected_color=THEME["chip"],
-            unselected_hover_color=THEME["bg_soft"],
-            text_color=THEME["text"],
-            text_color_disabled=THEME["muted"],
-        )
-        self.theme_segment.pack(fill="x", padx=14, pady=(0, 12))
-        self.theme_segment.set("Тёмная" if is_dark_theme() else "Светлая")
 
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.grid(row=1, column=1, sticky="nsew", padx=(8, 16), pady=12)
@@ -319,7 +273,6 @@ class RestoreIosApp(ctk.CTk):
         top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         top_bar.grid_columnconfigure(1, weight=1)
         self._top_bar = top_bar
-        self._chrome_frames.append(top_bar)
 
         self.selected_icon_label = ctk.CTkLabel(top_bar, text="")
         self.selected_icon_label.grid(row=0, column=0, padx=(16, 10), pady=14)
@@ -334,7 +287,6 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["silver"],
         )
         self.selected_label.pack(anchor="w")
-        self._chrome_text_labels.append((self.selected_label, "silver"))
 
         self.selected_meta_label = ctk.CTkLabel(
             info_wrap,
@@ -342,7 +294,6 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["muted"],
         )
         self.selected_meta_label.pack(anchor="w", pady=(2, 0))
-        self._chrome_text_labels.append((self.selected_meta_label, "muted"))
 
         self.install_button = primary_button(
             top_bar,
@@ -353,12 +304,11 @@ class RestoreIosApp(ctk.CTk):
             font=ui_font(14, weight="bold"),
         )
         self.install_button.grid(row=0, column=2, padx=(8, 18), pady=16)
-        self._primary_buttons.append(self.install_button)
         bind_press_feedback(self._anim, self.install_button)
 
         catalog_nav = ctk.CTkFrame(main, fg_color="transparent")
-        catalog_nav.grid(row=1, column=0, sticky="ew", pady=(0, 4))
-        catalog_nav.grid_columnconfigure(1, weight=1)
+        catalog_nav.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        catalog_nav.grid_columnconfigure(2, weight=1)
 
         self.catalog_back_button = secondary_button(
             catalog_nav,
@@ -367,8 +317,7 @@ class RestoreIosApp(ctk.CTk):
             width=110,
             height=32,
         )
-        self.catalog_back_button.grid(row=0, column=0, sticky="w")
-        self._secondary_buttons.append(self.catalog_back_button)
+        self.catalog_back_button.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         self.catalog_path_label = ctk.CTkLabel(
             catalog_nav,
@@ -377,8 +326,7 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["silver"],
             anchor="w",
         )
-        self.catalog_path_label.grid(row=0, column=1, sticky="w", padx=(10, 0))
-        self._chrome_text_labels.append((self.catalog_path_label, "silver"))
+        self.catalog_path_label.grid(row=0, column=1, sticky="w", padx=(0, 12))
 
         self.bank_search_var = tk.StringVar()
         self.bank_search_entry = ctk.CTkEntry(
@@ -390,25 +338,36 @@ class RestoreIosApp(ctk.CTk):
             fg_color=THEME["input"],
             border_color=THEME["glass_border"],
             text_color=THEME["text"],
-            width=260,
+            placeholder_text_color=THEME["muted"],
         )
-        self.bank_search_entry.grid(row=0, column=2, sticky="e", padx=(10, 0))
+        self.bank_search_entry.grid(row=0, column=2, sticky="ew")
         self.bank_search_var.trace_add("write", lambda *_: self._search_debouncer.trigger())
         self.bank_search_entry.bind("<Return>", lambda _e: self._commit_search())
 
         self.recent_searches_frame = ctk.CTkFrame(main, fg_color="transparent")
         self.recent_searches_frame.grid(row=2, column=0, sticky="ew", pady=(0, 4))
 
-        self.app_list = ctk.CTkScrollableFrame(main, fg_color="transparent")
+        # Explicit bg — transparent CTkScrollableFrame canvas often mismatches theme
+        # (black gaps in light / white gaps in dark), especially with mica/DWM.
+        self.app_list = ctk.CTkScrollableFrame(
+            main,
+            fg_color=THEME["bg"],
+            corner_radius=0,
+            border_width=0,
+            scrollbar_button_color=THEME["glass_border"],
+            scrollbar_button_hover_color=THEME["muted"],
+        )
         self.app_list.grid(row=3, column=0, sticky="nsew")
         self.app_list.grid_columnconfigure(0, weight=1)
         self.app_list.grid_columnconfigure(1, weight=1)
+        self._style_app_list()
 
         log_frame = glass_frame(main)
         log_frame.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         log_frame.grid_columnconfigure(0, weight=1)
         self._log_frame = log_frame
-        self._chrome_frames.append(log_frame)
+        # Idle: hide empty glass slab under the catalog.
+        log_frame.grid_remove()
 
         self.log_title = ctk.CTkLabel(
             log_frame,
@@ -417,7 +376,6 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["text"],
         )
         self.log_title.grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
-        self._chrome_text_labels.append((self.log_title, "text"))
 
         self.progress_frame = ctk.CTkFrame(log_frame, fg_color="transparent")
         self.progress_frame.grid(row=1, column=0, sticky="ew", padx=14, pady=(8, 8))
@@ -432,7 +390,6 @@ class RestoreIosApp(ctk.CTk):
             font=ui_font(13),
         )
         self.progress_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        self._chrome_text_labels.append((self.progress_label, "muted"))
 
         self.phases_row = ctk.CTkFrame(self.progress_frame, fg_color="transparent")
         self.phases_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
@@ -484,7 +441,6 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["silver"],
         )
         label.pack(anchor="w", padx=16, pady=(top_pad, 8))
-        self._chrome_text_labels.append((label, "silver"))
         return label
 
     def _action_button(
@@ -496,116 +452,49 @@ class RestoreIosApp(ctk.CTk):
         secondary: bool = False,
     ) -> ctk.CTkButton:
         if secondary:
-            button = secondary_button(parent, text=text, command=command)
-            self._secondary_buttons.append(button)
-            return button
-        button = primary_button(parent, text=text, command=command)
-        self._primary_buttons.append(button)
-        return button
+            return secondary_button(parent, text=text, command=command)
+        return primary_button(parent, text=text, command=command)
 
-    def _on_theme_segment(self, value: str) -> None:
-        mode = "dark" if value == "Тёмная" else "light"
-        self._apply_theme_mode(mode)
-
-    def _apply_theme_mode(self, mode: str) -> None:
-        if self._theme_applying:
+    def _style_app_list(self) -> None:
+        """Keep CTkScrollableFrame canvas/scrollbar in sync with THEME["bg"]."""
+        app_list = getattr(self, "app_list", None)
+        if app_list is None:
             return
-        self._theme_applying = True
         try:
-            normalized = apply_theme(mode)
-            if self.settings.theme_mode != normalized:
-                self.settings.theme_mode = normalized
-            ctk.set_appearance_mode(normalized)
-            apply_glass_window(self, dark=normalized == "dark")
-            self._recolor_chrome()
-            self._refresh_app_list()
-            self._render_recent_searches()
-            desired = "Тёмная" if normalized == "dark" else "Светлая"
-            if hasattr(self, "theme_segment") and self.theme_segment.get() != desired:
-                self.theme_segment.set(desired)
-            self._toast("Тема: тёмная" if normalized == "dark" else "Тема: светлая", kind="info")
-        finally:
-            self._theme_applying = False
-
-    def _recolor_chrome(self) -> None:
-        try:
-            self.configure(fg_color=THEME["bg"])
-        except tk.TclError:
-            pass
-
-        for frame in self._chrome_frames:
-            try:
-                frame.configure(fg_color=THEME["glass"], border_color=THEME["glass_border"])
-            except tk.TclError:
-                continue
-
-        for label, key in self._chrome_text_labels:
-            try:
-                label.configure(text_color=THEME[key])
-            except tk.TclError:
-                continue
-
-        for button in self._primary_buttons:
-            try:
-                button.configure(
-                    fg_color=THEME["accent"],
-                    hover_color=THEME["accent_hover"],
-                    text_color=THEME["accent_text"],
-                )
-            except tk.TclError:
-                continue
-
-        for button in self._secondary_buttons:
-            try:
-                button.configure(
-                    fg_color=THEME["chip"],
-                    hover_color=THEME["bg_soft"],
-                    text_color=THEME["text"],
-                )
-            except tk.TclError:
-                continue
-
-        try:
-            self.bank_search_entry.configure(
-                fg_color=THEME["input"],
-                border_color=THEME["glass_border"],
-                text_color=THEME["text"],
+            app_list.configure(
+                fg_color=THEME["bg"],
+                scrollbar_button_color=THEME["glass_border"],
+                scrollbar_button_hover_color=THEME["muted"],
             )
         except tk.TclError:
-            pass
-
+            return
+        # Defensive: some CTK builds leave the raw tk canvas on the previous mode.
         try:
-            self.progress_bar.configure(
-                progress_color=THEME["accent"],
-                fg_color=THEME["glass_border"],
-            )
+            canvas = getattr(app_list, "_parent_canvas", None)
+            if canvas is not None:
+                canvas.configure(bg=THEME["bg"])
+            tk.Frame.configure(app_list, bg=THEME["bg"])
         except tk.TclError:
             pass
 
-        try:
-            self.log_box.configure(
-                fg_color=THEME["log"],
-                border_color=THEME["glass_border"],
-                text_color=THEME["silver"],
-            )
-        except tk.TclError:
-            pass
-
-        if hasattr(self, "theme_segment"):
+    def _update_log_frame_visibility(self) -> None:
+        """Show bottom panel only when progress or tech log is active."""
+        log_frame = getattr(self, "_log_frame", None)
+        if log_frame is None:
+            return
+        progress_shown = bool(
+            getattr(self, "progress_frame", None) and self.progress_frame.winfo_manager()
+        )
+        if self._log_visible or progress_shown:
             try:
-                self.theme_segment.configure(
-                    fg_color=THEME["chip"],
-                    selected_color=THEME["accent"],
-                    selected_hover_color=THEME["accent_hover"],
-                    unselected_color=THEME["chip"],
-                    unselected_hover_color=THEME["bg_soft"],
-                    text_color=THEME["text"],
-                    text_color_disabled=THEME["muted"],
-                )
+                log_frame.grid()
             except tk.TclError:
                 pass
-
-        self._reset_phases()
+            return
+        try:
+            log_frame.grid_remove()
+        except tk.TclError:
+            pass
 
     def _log(self, message: str) -> None:
         if not getattr(self, "log_box", None):
@@ -630,10 +519,12 @@ class RestoreIosApp(ctk.CTk):
         if self._log_visible:
             self.log_title.grid()
             self.log_box.grid()
+            self._update_log_frame_visibility()
             self._log("Технический журнал включён (ещё 5 кликов по версии — скрыть).")
         else:
             self.log_title.grid_remove()
             self.log_box.grid_remove()
+            self._update_log_frame_visibility()
 
     def _purge_stale_caches(self) -> None:
         """Remove old IPA cache from AppData — safe even if the app is installed elsewhere."""
@@ -869,6 +760,7 @@ class RestoreIosApp(ctk.CTk):
 
     def _set_progress(self, text: str, value: float) -> None:
         self.progress_frame.grid()
+        self._update_log_frame_visibility()
         self.progress_label.configure(text=text)
         self._progress_value = max(self._progress_value, min(1.0, value))
         animate_progress_to(self._anim, self.progress_bar, self._progress_value)
@@ -877,6 +769,7 @@ class RestoreIosApp(ctk.CTk):
         self._stop_progress_creep()
         self._progress_active = True
         self.progress_frame.grid()
+        self._update_log_frame_visibility()
         self.progress_label.configure(text=text)
 
         def tick() -> None:
@@ -900,6 +793,7 @@ class RestoreIosApp(ctk.CTk):
         self.progress_bar.set(0)
         self.progress_label.configure(text="")
         self.progress_frame.grid_remove()
+        self._update_log_frame_visibility()
 
     def _progress_callback(self) -> Callable[[float, str], None]:
         def callback(value: float, text: str) -> None:
@@ -1129,7 +1023,7 @@ class RestoreIosApp(ctk.CTk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(fg_color=THEME["bg"])
-        dialog.after(50, lambda: apply_glass_window(dialog, dark=is_dark_theme()))
+        dialog.after(50, lambda: apply_glass_window(dialog, dark=True))
         fade_in_window(dialog)
 
         card = glass_frame(dialog)
@@ -1536,7 +1430,7 @@ class RestoreIosApp(ctk.CTk):
         return filtered
 
     def _schedule_card_reveal(self, card: ctk.CTkFrame, index: int, token: int) -> None:
-        # For small catalogs keep light stagger; for large lists show instantly.
+        # Subtle border fade only — avoid painting cards with window bg (gap flash).
         if index > 12:
             return
         delay = min(index, 8) * 20
@@ -1549,7 +1443,6 @@ class RestoreIosApp(ctk.CTk):
                 card,
                 target_fg=THEME["glass"],
                 target_border=THEME["glass_border"],
-                bg_color=THEME["bg"],
                 duration_ms=DURATION_FAST,
             )
 
@@ -1940,7 +1833,7 @@ class RestoreIosApp(ctk.CTk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(fg_color=THEME["bg"])
-        dialog.after(50, lambda: apply_glass_window(dialog, dark=is_dark_theme()))
+        dialog.after(50, lambda: apply_glass_window(dialog, dark=True))
         fade_in_window(dialog)
 
         if logo := self.icon_loader.get_logo(36):

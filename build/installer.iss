@@ -1,7 +1,7 @@
 ﻿; GROMOV Restore+ — installer script for Inno Setup 6
 
 #define MyAppName "GROMOV Restore+"
-#define MyAppVersion "1.2.4"
+#define MyAppVersion "1.2.5"
 #define MyAppPublisher "GROMOV"
 #define MyAppExeName "GROMOV-RestorePlus.exe"
 

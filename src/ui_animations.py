@@ -5,11 +5,16 @@ from typing import Callable
 
 import customtkinter as ctk
 
+from theme import THEME
+
 # Длительности анимаций (мс)
 DURATION_FAST = 150
 DURATION_NORMAL = 220
 DURATION_SLOW = 300
+DURATION_THEME = 180
 STAGGER_DELAY = 45
+THEME_FADE_FLOOR = 0.08
+THEME_FADE_TARGET = 0.99
 
 
 def ease_out_cubic(t: float) -> float:
@@ -141,16 +146,26 @@ def bind_smooth_hover(
     is_selected: Callable[[], bool],
     duration_ms: int = DURATION_FAST,
 ) -> None:
+    # Targets read THEME live so hover stays correct after in-place theme switch.
+    _ = (normal_fg, hover_fg, normal_border, hover_border)
+
+    def _color(attr: str, fallback_key: str) -> str:
+        try:
+            value = card.cget(attr)
+        except tk.TclError:
+            return THEME[fallback_key]
+        return value if isinstance(value, str) and value.startswith("#") else THEME[fallback_key]
+
     def on_enter(_event: object) -> None:
         if is_selected():
             return
         runner.tween_colors(
             card,
             f"hover:{card_key}",
-            from_fg=card.cget("fg_color") if isinstance(card.cget("fg_color"), str) else normal_fg,
-            to_fg=hover_fg,
-            from_border=card.cget("border_color") if isinstance(card.cget("border_color"), str) else normal_border,
-            to_border=hover_border,
+            from_fg=_color("fg_color", "glass"),
+            to_fg=THEME["glass_hover"],
+            from_border=_color("border_color", "glass_border"),
+            to_border=THEME["glass_border_bright"],
             duration_ms=duration_ms,
         )
 
@@ -161,15 +176,46 @@ def bind_smooth_hover(
         runner.tween_colors(
             card,
             f"hover:{card_key}",
-            from_fg=card.cget("fg_color") if isinstance(card.cget("fg_color"), str) else hover_fg,
-            to_fg=normal_fg,
-            from_border=card.cget("border_color") if isinstance(card.cget("border_color"), str) else hover_border,
-            to_border=normal_border,
+            from_fg=_color("fg_color", "glass_hover"),
+            to_fg=THEME["glass"],
+            from_border=_color("border_color", "glass_border_bright"),
+            to_border=THEME["glass_border"],
             duration_ms=duration_ms,
         )
 
     card.bind("<Enter>", on_enter)
     card.bind("<Leave>", on_leave)
+
+
+def fade_window_alpha(
+    window: ctk.CTkToplevel | ctk.CTk,
+    runner: AnimationRunner,
+    *,
+    to_alpha: float,
+    duration_ms: int = DURATION_THEME,
+    on_complete: Callable[[], None] | None = None,
+    key: str = "fade_alpha",
+) -> None:
+    """Tween window -alpha; used to hide theme reconfigure flicker."""
+    try:
+        from_alpha = float(window.attributes("-alpha"))
+    except (tk.TclError, TypeError, ValueError):
+        from_alpha = THEME_FADE_TARGET
+
+    def on_frame(t: float) -> None:
+        try:
+            window.attributes("-alpha", from_alpha + (to_alpha - from_alpha) * t)
+        except tk.TclError:
+            pass
+
+    runner.tween(
+        key,
+        duration_ms=duration_ms,
+        on_frame=on_frame,
+        on_complete=on_complete,
+        easing=ease_in_out_cubic,
+        interval_ms=16,
+    )
 
 
 def bind_press_feedback(runner: AnimationRunner, button: ctk.CTkButton, *, pressed_scale: float = 0.96) -> None:
@@ -196,16 +242,18 @@ def reveal_card(
     *,
     target_fg: str,
     target_border: str,
-    bg_color: str,
+    bg_color: str | None = None,
     duration_ms: int = DURATION_NORMAL,
 ) -> None:
-    card.configure(fg_color=bg_color, border_color=bg_color)
+    """Fade card border in; keep glass fill (no window-bg flash over scroll gaps)."""
+    _ = bg_color  # optional, ignored — kept for call-site compatibility
+    card.configure(fg_color=target_fg, border_color=target_fg)
     runner.tween_colors(
         card,
         f"reveal:{id(card)}",
-        from_fg=bg_color,
+        from_fg=target_fg,
         to_fg=target_fg,
-        from_border=bg_color,
+        from_border=target_fg,
         to_border=target_border,
         duration_ms=duration_ms,
     )

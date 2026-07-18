@@ -5,18 +5,27 @@ import sys
 import tkinter as tk
 
 
-def apply_glass_window(window: tk.Misc, *, alpha: float = 0.99, dark: bool = False) -> None:
+def apply_glass_window(
+    window: tk.Misc,
+    *,
+    alpha: float | None = 0.99,
+    dark: bool = False,
+    sync: bool = True,
+) -> None:
     """Windows 11: mica/acrylic backdrop. Light mode by default for premium Fluent look."""
-    try:
-        window.attributes("-alpha", alpha)
-    except tk.TclError:
-        pass
+    if alpha is not None:
+        try:
+            window.attributes("-alpha", alpha)
+        except tk.TclError:
+            pass
 
     if sys.platform != "win32":
         return
 
     try:
-        window.update_idletasks()
+        # Avoid forced layout flush during theme crossfade (causes visible flicker).
+        if sync:
+            window.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
         if not hwnd:
             return

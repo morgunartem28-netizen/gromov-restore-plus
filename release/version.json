@@ -1,6 +1,6 @@
 {
-  "version": "1.2.4",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.4/GROMOV-RestorePlus-Setup.exe",
-  "sha256": "d95853d20f86cab0dfb5d700760eeb162ea2621db8adf9b642d5e7cc82608ec5",
-  "notes": "Исправлена проверка обновлений при кэше GitHub; корректно находится 1.2.3+. Манифест опрашивается со всех зеркал (включая GitHub API), выбирается наибольшая версия; cache-bust для raw/CDN."
+  "version": "1.2.5",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.5/GROMOV-RestorePlus-Setup.exe",
+  "sha256": "e9dca5c6c606d3f06320895664837055261b75498d35704b54e7639d9cce020a",
+  "notes": "только тёмная тема; исправлены полосы каталога; проверка обновлений по всем зеркалам + скачать в браузере"
 }

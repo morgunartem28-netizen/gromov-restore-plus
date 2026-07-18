@@ -8,8 +8,8 @@ from app_paths import data_dir
 
 DEFAULT_IPA_CACHE_DAYS = 7
 ALLOWED_CACHE_DAYS = (3, 7, 30)
-DEFAULT_THEME_MODE = "light"
-ALLOWED_THEME_MODES = ("light", "dark")
+DEFAULT_THEME_MODE = "dark"
+ALLOWED_THEME_MODES = ("light", "dark")  # light kept for migration; UI forces dark
 
 
 class AppSettings:
@@ -72,11 +72,11 @@ class AppSettings:
 
     @property
     def theme_mode(self) -> str:
-        value = str(self._data.get("theme_mode", DEFAULT_THEME_MODE) or DEFAULT_THEME_MODE).strip().lower()
-        return value if value in ALLOWED_THEME_MODES else DEFAULT_THEME_MODE
+        """Always dark — light theme removed; stored value ignored."""
+        return "dark"
 
     @theme_mode.setter
     def theme_mode(self, mode: str) -> None:
-        normalized = "dark" if str(mode or "").strip().lower() == "dark" else "light"
-        self._data["theme_mode"] = normalized
+        # Persist dark only so old "light" settings migrate away.
+        self._data["theme_mode"] = "dark"
         self.save()
