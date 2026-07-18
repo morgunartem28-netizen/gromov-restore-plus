@@ -101,6 +101,8 @@ def is_trusted_update_url(url: str) -> bool:
         "https://raw.githubusercontent.com/",
         "https://objects.githubusercontent.com/",
         "https://release-assets.githubusercontent.com/",
+        # Contents API (uncached) for version.json when raw/CDN lag behind main
+        "https://api.github.com/repos/morgunartem28-netizen/gromov-restore-plus/contents/",
         # jsDelivr mirrors for version.json when raw.githubusercontent.com is blocked
         "https://cdn.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus",
         "https://fastly.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus",

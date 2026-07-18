@@ -1,6 +1,6 @@
 {
   "version": "1.2.4",
   "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.4/GROMOV-RestorePlus-Setup.exe",
-  "sha256": "b5d26ff6b1f80c0478b2bdeb9c90ba5e2073fee30e6ef80d0367db5b96c0b762",
-  "notes": "Исправлена проверка обновлений при кэше GitHub; корректно находится 1.2.3+. Манифест берётся со всех зеркал, выбирается наибольшая версия; добавлен cache-bust для raw/CDN."
+  "sha256": "d95853d20f86cab0dfb5d700760eeb162ea2621db8adf9b642d5e7cc82608ec5",
+  "notes": "Исправлена проверка обновлений при кэше GitHub; корректно находится 1.2.3+. Манифест опрашивается со всех зеркал (включая GitHub API), выбирается наибольшая версия; cache-bust для raw/CDN."
 }

@@ -27,10 +27,13 @@ GITHUB_RELEASES_LATEST = (
     "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/latest"
 )
 
-# Fallback mirrors when raw.githubusercontent.com is blocked (common in RU).
+# Fallback mirrors when raw.githubusercontent.com is blocked (common in RU)
+# or returns a stale cached copy of version.json.
 _BUILTIN_MANIFEST_FALLBACKS = (
     "https://cdn.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus@main/release/version.json",
     "https://github.com/morgunartem28-netizen/gromov-restore-plus/raw/main/release/version.json",
+    # GitHub Contents API is typically fresher than raw.githubusercontent.com CDN.
+    "https://api.github.com/repos/morgunartem28-netizen/gromov-restore-plus/contents/release/version.json?ref=main",
 )
 
 
@@ -117,12 +120,16 @@ def _ssl_context() -> ssl.SSLContext:
     return ssl.create_default_context()
 
 
-def _request_headers() -> dict[str, str]:
-    return {
+def _request_headers(url: str | None = None) -> dict[str, str]:
+    headers = {
         "User-Agent": f"GROMOV-RestorePlus/{APP_VERSION} (+https://github.com/morgunartem28-netizen/gromov-restore-plus)",
         "Accept": "application/json,application/octet-stream,*/*",
         "Cache-Control": "no-cache",
     }
+    # Return file bytes, not the base64 Contents API envelope.
+    if url and "api.github.com/repos/" in url.lower() and "/contents/" in url.lower():
+        headers["Accept"] = "application/vnd.github.raw"
+    return headers
 
 
 def _reason_text(exc: BaseException) -> str:
@@ -341,7 +348,7 @@ def _fetch_bytes(url: str, *, timeout: float) -> bytes:
             "Небезопасный адрес обновлений.\n"
             "Разрешены только HTTPS-ссылки GitHub и доверенных CDN."
         )
-    request = urllib.request.Request(url, headers=_request_headers())
+    request = urllib.request.Request(url, headers=_request_headers(url))
     last_error: BaseException | None = None
     for attempt in range(1, _MAX_FETCH_ATTEMPTS + 1):
         try:
