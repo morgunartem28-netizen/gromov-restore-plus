@@ -1,6 +1,6 @@
 {
-  "version": "1.2.5",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.5/GROMOV-RestorePlus-Setup.exe",
-  "sha256": "e9dca5c6c606d3f06320895664837055261b75498d35704b54e7639d9cce020a",
-  "notes": "только тёмная тема; исправлены полосы каталога; проверка обновлений по всем зеркалам + скачать в браузере"
+  "version": "1.2.6",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.6/GROMOV-RestorePlus-Setup.exe",
+  "sha256": "c8d24ccbcc6445fd6023648ce16d761653e7b9eccf9f679d9589c477f3555acf",
+  "notes": "1.2.6: для старых 1.1.x/≤1.2.1 — автообновление если доступен GitHub raw (иначе один раз Setup из браузера); внутри — зеркала, TLS с системными сертификатами, «скачать в браузере», лог update_debug.log; тёмная тема, фон каталога."
 }

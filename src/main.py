@@ -58,6 +58,7 @@ from update_checker import (
     check_for_updates,
     download_verified_installer,
     resolve_browser_download_url,
+    update_debug_log_path,
 )
 from user_errors import friendly_error
 from version import APP_VERSION
@@ -1145,7 +1146,14 @@ class RestoreIosApp(ctk.CTk):
                 )
             except UpdateCheckError as exc:
                 message = str(exc)
+                debug_path = update_debug_log_path()
                 self.after(0, lambda m=message: self._log(m))
+                self.after(
+                    0,
+                    lambda p=debug_path: self._log(
+                        f"Диагностика обновления (файл): {p}"
+                    ),
+                )
                 self.after(
                     0,
                     lambda m=message: self._show_update_action_dialog(
@@ -1235,7 +1243,14 @@ class RestoreIosApp(ctk.CTk):
                 result = check_for_updates()
             except UpdateCheckError as exc:
                 message = str(exc)
+                debug_path = update_debug_log_path()
                 self.after(0, lambda m=message: self._log(f"Обновление: {m}"))
+                self.after(
+                    0,
+                    lambda p=debug_path: self._log(
+                        f"Диагностика обновления (файл): {p}"
+                    ),
+                )
                 self.after(0, lambda: self._toast("Не удалось проверить обновления", kind="warning"))
                 self.after(0, lambda m=message: self._present_update_check_failure(m))
                 return
@@ -1244,7 +1259,14 @@ class RestoreIosApp(ctk.CTk):
                     "Не удалось проверить обновления из-за внутренней ошибки.\n"
                     f"{type(exc).__name__}: {exc}"
                 )
+                debug_path = update_debug_log_path()
                 self.after(0, lambda m=message: self._log(f"Обновление: {m}"))
+                self.after(
+                    0,
+                    lambda p=debug_path: self._log(
+                        f"Диагностика обновления (файл): {p}"
+                    ),
+                )
                 self.after(0, lambda m=message: self._present_update_check_failure(m))
                 return
 

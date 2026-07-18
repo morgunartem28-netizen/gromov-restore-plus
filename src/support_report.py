@@ -75,6 +75,9 @@ def build_support_report(
         "",
         "=== install.log (хвост) ===",
         _tail(data / "install.log"),
+        "",
+        "=== update_debug.log (хвост) ===",
+        _tail(data / "update_debug.log", lines=120),
     ]
     out.write_text("\n".join(sections), encoding="utf-8")
     return out
