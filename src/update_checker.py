@@ -44,14 +44,15 @@ BROWSER_SETUP_PAGE = (
 
 # Fallback mirrors when raw.githubusercontent.com is blocked (common in RU)
 # or returns a stale cached copy of version.json.
+# Prefer Contents API / jsDelivr before raw — raw CDN can lag behind main for hours.
 _BUILTIN_MANIFEST_FALLBACKS = (
+    f"https://api.github.com/repos/{_REPO_SLUG}/contents/release/version.json?ref=main",
     f"https://cdn.jsdelivr.net/gh/{_REPO_SLUG}@main/release/version.json",
     f"https://github.com/{_REPO_SLUG}/raw/main/release/version.json",
-    # GitHub Contents API is typically fresher than raw.githubusercontent.com CDN.
-    f"https://api.github.com/repos/{_REPO_SLUG}/contents/release/version.json?ref=main",
     # Verified GitHub proxies when official raw/api hosts are filtered.
     f"https://gh-proxy.com/{_RAW_MANIFEST}",
     f"https://edgeone.gh-proxy.com/{_RAW_MANIFEST}",
+    _RAW_MANIFEST,
 )
 
 
@@ -774,14 +775,35 @@ def _with_cache_bust(url: str) -> str:
     return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
 
 
+def _manifest_source_rank(url: str) -> int:
+    """Higher = fresher / more trusted when versions are equal.
+
+    raw.githubusercontent.com and github.com/raw can serve a stale HTTP 200
+    for hours after main moves (observed: wrong sha256 for 1.2.7 Setup).
+    """
+    text = (url or "").lower()
+    if "api.github.com" in text and "/contents/" in text:
+        return 100
+    if "cdn.jsdelivr.net" in text:
+        return 80
+    if "gh-proxy.com" in text or "ghproxy.net" in text or "ghfast.top" in text:
+        return 40
+    if "github.com" in text and "/raw/" in text:
+        return 20
+    if "raw.githubusercontent.com" in text:
+        return 10
+    return 30
+
+
 def _fetch_manifest(urls: list[str]) -> dict:
     """Fetch all mirrors and prefer the payload with the highest version.
 
     A stale HTTP 200 from raw.githubusercontent.com must not hide a newer
-    manifest already visible on jsDelivr or another mirror.
+    manifest already visible on jsDelivr or another mirror. When versions tie,
+    prefer Contents API / jsDelivr over raw CDN (wrong sha256 risk).
     """
     errors: list[str] = []
-    candidates: list[dict] = []
+    candidates: list[tuple[str, dict]] = []
     _debug_log(f"manifest fetch start mirrors={len(urls)}")
     for url in urls:
         host = _manifest_host(url)
@@ -810,16 +832,26 @@ def _fetch_manifest(urls: list[str]) -> dict:
             errors.append(f"{host}: нет версии в манифесте")
             _debug_log(f"manifest fail host={host} reason=no_version")
             continue
-        _debug_log(f"manifest candidate host={host} version={version}")
-        candidates.append(payload)
+        sha = normalize_sha256(
+            str(payload.get("sha256") or payload.get("setup_sha256") or "")
+        )
+        _debug_log(
+            f"manifest candidate host={host} version={version} "
+            f"sha256={(sha[:12] + '...') if sha else '-'}"
+        )
+        candidates.append((url, payload))
 
     if candidates:
-        best = max(
+        best_url, best = max(
             candidates,
-            key=lambda item: parse_version(str(item.get("version") or "")),
+            key=lambda item: (
+                parse_version(str(item[1].get("version") or "")),
+                _manifest_source_rank(item[0]),
+            ),
         )
         _debug_log(
             f"manifest selected version={best.get('version')} "
+            f"host={_manifest_host(best_url)} "
             f"from {len(candidates)} candidate(s)"
         )
         return best

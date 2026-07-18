@@ -33,18 +33,21 @@ $ProgressPreference = "SilentlyContinue"
 $Repo = "morgunartem28-netizen/gromov-restore-plus"
 $SetupName = "GROMOV-RestorePlus-Setup.exe"
 $RawManifest = "https://raw.githubusercontent.com/$Repo/main/release/version.json"
+$ApiManifest = "https://api.github.com/repos/$Repo/contents/release/version.json?ref=main"
 
-# Prefer GitHub/proxy mirrors first. jsDelivr @main can stay stale for days
-# (observed serving 1.2.1 while main was 1.2.7) — keep it last as last resort.
+# Prefer Contents API (uncached) first. raw.githubusercontent.com / github.com/raw
+# can return a stale HTTP 200 with a wrong sha256 for hours after main moves
+# (observed on 1.2.7 after the Setup asset was replaced). jsDelivr next; raw last.
 $ManifestCandidates = @(
     $ManifestUrl
-    "https://github.com/$Repo/raw/main/release/version.json"
-    $RawManifest
+    $ApiManifest
+    "https://cdn.jsdelivr.net/gh/$Repo@main/release/version.json"
     "https://gh-proxy.com/$RawManifest"
     "https://edgeone.gh-proxy.com/$RawManifest"
     "https://ghproxy.net/$RawManifest"
     "https://ghfast.top/$RawManifest"
-    "https://cdn.jsdelivr.net/gh/$Repo@main/release/version.json"
+    "https://github.com/$Repo/raw/main/release/version.json"
+    $RawManifest
 ) | Where-Object { $_ -and $_.Trim() } | Select-Object -Unique
 
 function Write-Step([string]$Message) {
@@ -68,10 +71,18 @@ function Get-Manifest {
         $tryUrl = "$url$bust"
         try {
             Write-Step "manifest try: $url"
-            $resp = Invoke-WebRequest -Uri $tryUrl -UseBasicParsing -TimeoutSec 25
+            $headers = @{
+                "User-Agent"    = "GROMOV-RestorePlus-silent-update"
+                "Cache-Control" = "no-cache"
+            }
+            if ($url -match 'api\.github\.com/.+/contents/') {
+                $headers["Accept"] = "application/vnd.github.raw"
+            }
+            $resp = Invoke-WebRequest -Uri $tryUrl -UseBasicParsing -TimeoutSec 25 -Headers $headers
             $json = $resp.Content | ConvertFrom-Json
             if (-not $json.version) { throw "no version field" }
-            Write-Step "manifest ok version=$($json.version)"
+            if (-not $json.sha256) { throw "no sha256 field" }
+            Write-Step "manifest ok version=$($json.version) sha256=$($json.sha256)"
             return $json
         }
         catch {
@@ -82,10 +93,16 @@ function Get-Manifest {
     throw ("Could not fetch version.json from any mirror:`n" + ($errors -join "`n"))
 }
 
-function Get-SetupCandidates([string]$SetupUrl, [string]$Version) {
+function Get-SetupCandidates([string]$SetupUrl, [string]$Version, $SetupUrls) {
     $list = New-Object System.Collections.Generic.List[string]
     $canonical = "https://github.com/$Repo/releases/download/$Version/$SetupName"
-    foreach ($u in @($SetupUrl, $canonical)) {
+    $fromManifest = @()
+    if ($SetupUrls) {
+        foreach ($item in @($SetupUrls)) {
+            $fromManifest += [string]$item
+        }
+    }
+    foreach ($u in @($SetupUrl) + $fromManifest + @($canonical)) {
         $t = [string]$u
         if ($t -and -not $list.Contains($t)) { $list.Add($t) | Out-Null }
     }
@@ -165,7 +182,8 @@ $sha = [string]($manifest.sha256)
 if (-not $version) { throw "version.json has no version" }
 if (-not $sha) { throw "version.json has no sha256" }
 
-$candidates = Get-SetupCandidates -SetupUrl $setupUrl -Version $version
+$candidates = Get-SetupCandidates -SetupUrl $setupUrl -Version $version -SetupUrls $manifest.setup_urls
+Write-Step ("expected sha256: $sha")
 Write-Step ("setup mirrors: " + ($candidates -join " | "))
 Get-SetupFile -Urls $candidates -Dest $setupPath -ExpectedSha $sha | Out-Null
 
