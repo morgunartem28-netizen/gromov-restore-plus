@@ -3,7 +3,7 @@ from __future__ import annotations
 import customtkinter as ctk
 
 # Fluent / Windows 11 light — премиальный светлый UI, акцент Apple Blue.
-THEME = {
+LIGHT_THEME: dict[str, str] = {
     "bg": "#F2F4F8",
     "bg_soft": "#E8ECF2",
     "surface": "#FFFFFF",
@@ -39,10 +39,77 @@ THEME = {
     "chip_active_text": "#FFFFFF",
 }
 
+# Graphite + Apple Blue — согласован с светлой брендовой палитрой.
+DARK_THEME: dict[str, str] = {
+    "bg": "#0F1115",
+    "bg_soft": "#171A21",
+    "surface": "#1C1F26",
+    "surface_elevated": "#242833",
+    "silver": "#F5F5F7",
+    "text": "#F5F5F7",
+    "text_secondary": "#AEAEB2",
+    "muted": "#8E8E93",
+    "accent": "#0A84FF",
+    "accent_hover": "#409CFF",
+    "accent_soft": "#0A2540",
+    "accent_text": "#FFFFFF",
+    "success": "#30D158",
+    "success_soft": "#0F2A1A",
+    "warning": "#FFD60A",
+    "warning_soft": "#2A2208",
+    "error": "#FF453A",
+    "error_soft": "#2A1210",
+    "glass": "#1C1F26",
+    "glass_hover": "#242833",
+    "glass_selected": "#0A2540",
+    "glass_border": "#2C313C",
+    "glass_border_bright": "#3A4050",
+    "glass_highlight": "#0A2540",
+    "input": "#171A21",
+    "input_focus": "#242833",
+    "log": "#14161C",
+    "skeleton": "#242833",
+    "skeleton_shine": "#2C313C",
+    "shadow": "#000000",
+    "chip": "#242833",
+    "chip_active": "#0A84FF",
+    "chip_active_text": "#FFFFFF",
+}
+
+THEME: dict[str, str] = dict(LIGHT_THEME)
+_THEME_MODE = "light"
+
 CORNER_RADIUS = 18
 CARD_PADX = 16
 CARD_PADY = 14
 RADIUS_PILL = 999
+
+
+def normalize_theme_mode(mode: str | None) -> str:
+    return "dark" if str(mode or "").strip().lower() == "dark" else "light"
+
+
+def apply_theme(mode: str | None) -> str:
+    """Switch active palette in-place so all THEME readers see new colors."""
+    global _THEME_MODE
+    normalized = normalize_theme_mode(mode)
+    _THEME_MODE = normalized
+    palette = DARK_THEME if normalized == "dark" else LIGHT_THEME
+    THEME.clear()
+    THEME.update(palette)
+    return normalized
+
+
+def get_theme() -> dict[str, str]:
+    return THEME
+
+
+def get_theme_mode() -> str:
+    return _THEME_MODE
+
+
+def is_dark_theme() -> bool:
+    return _THEME_MODE == "dark"
 
 
 def ui_font(size: int, *, weight: str = "normal") -> ctk.CTkFont:

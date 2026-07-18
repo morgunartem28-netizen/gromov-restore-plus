@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 import customtkinter as ctk
 
 from ipatool_client import IpatoolClient, IpatoolError, IpatoolTwoFactorRequired
-from theme import CARD_PADX, THEME, glass_frame, primary_button, secondary_button, ui_font
+from theme import CARD_PADX, THEME, glass_frame, is_dark_theme, primary_button, secondary_button, ui_font
 from ui_animations import AnimationRunner, bind_press_feedback, fade_in_window
 from window_effects import apply_glass_window
 
@@ -34,7 +34,7 @@ class AppleLoginDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
         self.configure(fg_color=THEME["bg"])
-        self.after(50, lambda: apply_glass_window(self))
+        self.after(50, lambda: apply_glass_window(self, dark=is_dark_theme()))
         fade_in_window(self)
 
         header = glass_frame(self)

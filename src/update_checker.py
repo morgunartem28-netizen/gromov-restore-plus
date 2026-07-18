@@ -7,6 +7,7 @@ import socket
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,11 +23,23 @@ _HASH_CHUNK = 1024 * 1024
 _MAX_FETCH_ATTEMPTS = 3
 _RETRY_DELAY_SEC = 0.8
 
+GITHUB_RELEASES_LATEST = (
+    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/latest"
+)
+
 # Fallback mirrors when raw.githubusercontent.com is blocked (common in RU).
 _BUILTIN_MANIFEST_FALLBACKS = (
     "https://cdn.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus@main/release/version.json",
     "https://github.com/morgunartem28-netizen/gromov-restore-plus/raw/main/release/version.json",
 )
+
+
+def resolve_browser_download_url(setup_url: str | None = None) -> str:
+    """Prefer a trusted setup_url; otherwise open the GitHub Releases page."""
+    url = (setup_url or "").strip()
+    if url and is_trusted_update_url(url):
+        return url
+    return GITHUB_RELEASES_LATEST
 
 
 class UpdateCheckError(RuntimeError):
@@ -84,12 +97,24 @@ def file_sha256(path: Path) -> str:
 
 def _ssl_context() -> ssl.SSLContext:
     """Build a TLS context that works both in source and frozen builds."""
+    candidates: list[Path] = []
+    # PyInstaller onedir ships cacert.pem under _internal/certifi/ (see *.spec datas).
+    bundled = resource_dir() / "certifi" / "cacert.pem"
+    if bundled.is_file():
+        candidates.append(bundled)
     try:
         import certifi  # type: ignore
 
-        return ssl.create_default_context(cafile=certifi.where())
+        candidates.append(Path(certifi.where()))
     except Exception:
-        return ssl.create_default_context()
+        pass
+    for cafile in candidates:
+        try:
+            if cafile.is_file():
+                return ssl.create_default_context(cafile=str(cafile))
+        except Exception:
+            continue
+    return ssl.create_default_context()
 
 
 def _request_headers() -> dict[str, str]:
@@ -142,6 +167,14 @@ def _is_dns_failure(exc: BaseException) -> bool:
     reason = getattr(exc, "reason", None)
     if isinstance(reason, socket.gaierror):
         return True
+    # Windows: WSAHOST_NOT_FOUND / WSANO_DATA often surface as OSError 11001/11004.
+    for candidate in (exc, reason):
+        if candidate is None:
+            continue
+        winerror = getattr(candidate, "winerror", None)
+        errno = getattr(candidate, "errno", None)
+        if winerror in {11001, 11004} or errno in {11001, 11004}:
+            return True
     text = _reason_text(exc).lower()
     return any(
         token in text
@@ -150,15 +183,19 @@ def _is_dns_failure(exc: BaseException) -> bool:
             "name or service not known",
             "nodename nor servname",
             "temporary failure in name resolution",
+            "errno 11001",
+            "winerror 11001",
         )
     )
 
 
 def _is_offline_failure(exc: BaseException) -> bool:
+    """True only for local network-down cases — not ISP/GitHub blocks."""
     reason = getattr(exc, "reason", None)
     if isinstance(reason, ConnectionError):
         errno = getattr(reason, "errno", None)
-        # Windows: 10051 network unreachable, 10050 network down, 10065 host unreachable
+        # Windows: 10051 network unreachable, 10050 network down, 10065 host unreachable.
+        # Do NOT treat 10061 (connection refused) as offline — often firewall/DPI block.
         if errno in {10050, 10051, 10065, 51, 65, 101, 113}:
             return True
     text = _reason_text(exc).lower()
@@ -168,13 +205,39 @@ def _is_offline_failure(exc: BaseException) -> bool:
             "network is unreachable",
             "network is down",
             "no route to host",
-            "connectex",
-            "failed to establish a new connection",
-            "connection refused",
-            "actively refused",
             "errno 10051",
             "errno 10050",
+            "errno 10065",
+        )
+    )
+
+
+def _is_blocked_or_filtered(exc: BaseException) -> bool:
+    """Connection reset/refused often means GitHub/CDN filtered, not a dead NIC."""
+    reason = getattr(exc, "reason", None)
+    for candidate in (exc, reason):
+        if candidate is None:
+            continue
+        errno = getattr(candidate, "errno", None)
+        winerror = getattr(candidate, "winerror", None)
+        if errno in {10054, 10061, 104, 111} or winerror in {10054, 10061}:
+            return True
+        if isinstance(candidate, (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError)):
+            return True
+    text = _reason_text(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "connection refused",
+            "actively refused",
+            "connection reset",
+            "connection aborted",
+            "failed to establish a new connection",
+            "connectex",
             "errno 10061",
+            "errno 10054",
+            "winerror 10061",
+            "winerror 10054",
         )
     )
 
@@ -206,9 +269,19 @@ def _format_transport_error(exc: BaseException, *, action: str) -> str:
             "Проверьте Wi-Fi/кабель, отключите режим «в самолёте» "
             "и повторите проверку обновлений."
         )
+    if _is_blocked_or_filtered(exc):
+        return (
+            f"{action} не удалась: соединение с сервером обновлений сброшено "
+            "или отклонено.\n"
+            "Часто это блокировка GitHub/CDN у провайдера, фаервол или антивирус — "
+            "не обязательно отсутствие интернета.\n"
+            "Откройте version.json в браузере, попробуйте VPN или другую сеть."
+        )
 
     detail = _reason_text(exc)
-    if detail and len(detail) < 160:
+    if detail:
+        if len(detail) > 160:
+            detail = detail[:157] + "..."
         return (
             f"{action} не удалась.\n"
             f"Причина: {detail}\n"
@@ -307,21 +380,30 @@ def _fetch_bytes(url: str, *, timeout: float) -> bytes:
     raise UpdateCheckError("Не удалось связаться с сервером обновлений.")
 
 
+def _manifest_host(url: str) -> str:
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").strip().lower()
+        return host or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _fetch_manifest(urls: list[str]) -> dict:
     errors: list[str] = []
     for url in urls:
+        host = _manifest_host(url)
         try:
             raw = _fetch_bytes(url, timeout=_CHECK_TIMEOUT_SEC).decode("utf-8-sig")
         except UpdateCheckError as exc:
-            errors.append(str(exc).split("\n", 1)[0])
+            errors.append(f"{host}: {str(exc).split(chr(10), 1)[0]}")
             continue
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
-            errors.append("ответ не JSON")
+            errors.append(f"{host}: ответ не JSON")
             continue
         if not isinstance(payload, dict):
-            errors.append("ответ не объект JSON")
+            errors.append(f"{host}: ответ не объект JSON")
             continue
         return payload
 
@@ -339,9 +421,10 @@ def _fetch_manifest(urls: list[str]) -> dict:
     raise UpdateCheckError(
         "Не удалось получить манифест обновлений ни с одного зеркала.\n"
         f"Детали: {summary}\n\n"
-        "Если интернет работает, GitHub может быть недоступен "
-        "(блокировка провайдера/фаервол).\n"
-        "Попробуйте другую сеть или VPN и нажмите «Обновить» снова."
+        "Если интернет работает, GitHub/CDN может быть недоступен "
+        "(блокировка провайдера/фаервол/антивирус).\n"
+        "Откройте ссылку version.json в браузере, попробуйте VPN "
+        "или другую сеть и нажмите «Обновить» снова."
     )
 
 

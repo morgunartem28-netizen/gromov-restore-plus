@@ -8,6 +8,8 @@ from app_paths import data_dir
 
 DEFAULT_IPA_CACHE_DAYS = 7
 ALLOWED_CACHE_DAYS = (3, 7, 30)
+DEFAULT_THEME_MODE = "light"
+ALLOWED_THEME_MODES = ("light", "dark")
 
 
 class AppSettings:
@@ -66,4 +68,15 @@ class AppSettings:
             return
         items = [q] + [item for item in self.recent_searches if item.lower() != q.lower()]
         self._data["recent_searches"] = items[:8]
+        self.save()
+
+    @property
+    def theme_mode(self) -> str:
+        value = str(self._data.get("theme_mode", DEFAULT_THEME_MODE) or DEFAULT_THEME_MODE).strip().lower()
+        return value if value in ALLOWED_THEME_MODES else DEFAULT_THEME_MODE
+
+    @theme_mode.setter
+    def theme_mode(self, mode: str) -> None:
+        normalized = "dark" if str(mode or "").strip().lower() == "dark" else "light"
+        self._data["theme_mode"] = normalized
         self.save()

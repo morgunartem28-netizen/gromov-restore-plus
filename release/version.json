@@ -1,6 +1,6 @@
 {
-  "version": "1.2.2",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.2/GROMOV-RestorePlus-Setup.exe",
-  "sha256": "c647ed30e714537af9fe833f72d4c356a619352a10c35e854f2d718cdf84236f",
-  "notes": "Исправлена проверка обновлений: зеркала манифеста (jsDelivr/GitHub), понятные ошибки сети (таймаут, DNS, SSL, офлайн), certifi для TLS в сборке. Светлый UI, тосты и фазы установки."
+  "version": "1.2.3",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.3/GROMOV-RestorePlus-Setup.exe",
+  "sha256": "dd1cbe55819fd7f7a7a7538c20a441ca39566755d0eba26b4769cad9f48d24c0",
+  "notes": "Переключатель темы: светлая и тёмная (сохраняется между запусками). Обновление в приложении надёжнее: зеркала манифеста (jsDelivr/GitHub), улучшенный TLS (certifi), понятные сообщения при блокировке сети. Если автообновление не сработало — запасной вариант «скачать в браузере» открывает доверенный Setup или страницу релизов GitHub."
 }

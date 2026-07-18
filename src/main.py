@@ -31,8 +31,11 @@ from theme import (
     CARD_PADX,
     CARD_PADY,
     THEME,
+    apply_theme,
     empty_state,
+    ghost_button,
     glass_frame,
+    is_dark_theme,
     primary_button,
     secondary_button,
     skeleton_card,
@@ -50,7 +53,13 @@ from ui_animations import (
     fade_in_window,
     reveal_card,
 )
-from update_checker import UpdateCheckError, check_for_updates, download_verified_installer
+from update_checker import (
+    UpdateCheckError,
+    UpdateCheckResult,
+    check_for_updates,
+    download_verified_installer,
+    resolve_browser_download_url,
+)
 from user_errors import friendly_error
 from version import APP_VERSION
 from window_effects import apply_glass_window
@@ -67,8 +76,11 @@ _INSTALL_PHASES = (
 
 class RestoreIosApp(ctk.CTk):
     def __init__(self) -> None:
+        settings = AppSettings()
+        theme_mode = apply_theme(settings.theme_mode)
+
         super().__init__()
-        ctk.set_appearance_mode("light")
+        ctk.set_appearance_mode(theme_mode)
         ctk.set_default_color_theme("blue")
 
         self.title("GROMOV Restore+")
@@ -76,8 +88,8 @@ class RestoreIosApp(ctk.CTk):
         self.minsize(980, 660)
         self._set_window_icon()
 
+        self.settings = settings
         self.config_manager = ConfigManager()
-        self.settings = AppSettings()
         self.icon_loader = IconLoader()
         self.ipatool: IpatoolClient | None = None
         self.device_installer = DeviceInstaller()
@@ -105,6 +117,12 @@ class RestoreIosApp(ctk.CTk):
         self._log_visible = False
         self._version_click_count = 0
         self._toasts: ToastHost | None = None
+        self._last_setup_url: str | None = None
+        self._theme_applying = False
+        self._chrome_frames: list[ctk.CTkFrame] = []
+        self._chrome_text_labels: list[tuple[ctk.CTkLabel, str]] = []
+        self._primary_buttons: list[ctk.CTkButton] = []
+        self._secondary_buttons: list[ctk.CTkButton] = []
         self._install_queue = InstallQueue(
             worker=self._queue_worker,
             on_changed=lambda: self.after(0, self._refresh_queue_ui),
@@ -118,7 +136,7 @@ class RestoreIosApp(ctk.CTk):
         self._restore_catalog_state()
         self._refresh_app_list()
         self._render_recent_searches()
-        self.after(50, lambda: apply_glass_window(self, dark=False))
+        self.after(50, lambda: apply_glass_window(self, dark=is_dark_theme()))
         self.after(200, self._startup_checks)
         self.after(300, self._warm_icon_cache)
         self.after(400, self._purge_stale_caches)
@@ -142,6 +160,8 @@ class RestoreIosApp(ctk.CTk):
         header = glass_frame(self, corner_radius=0, fg_color=THEME["glass"])
         header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
         header.grid_columnconfigure(1, weight=1)
+        self._header = header
+        self._chrome_frames.append(header)
 
         logo = self.icon_loader.get_logo(52)
         if logo:
@@ -155,26 +175,32 @@ class RestoreIosApp(ctk.CTk):
         title_row = ctk.CTkFrame(title_wrap, fg_color="transparent")
         title_row.pack(anchor="w")
 
-        ctk.CTkLabel(
+        brand = ctk.CTkLabel(
             title_row,
             text="GROMOV ",
             font=ui_font(26, weight="bold"),
             text_color=THEME["silver"],
-        ).pack(side="left")
+        )
+        brand.pack(side="left")
+        self._chrome_text_labels.append((brand, "silver"))
 
-        ctk.CTkLabel(
+        product = ctk.CTkLabel(
             title_row,
             text="Restore+",
             font=ui_font(26, weight="bold"),
             text_color=THEME["accent"],
-        ).pack(side="left")
+        )
+        product.pack(side="left")
+        self._chrome_text_labels.append((product, "accent"))
 
-        ctk.CTkLabel(
+        tagline = ctk.CTkLabel(
             title_wrap,
             text="Приложения из вашего Apple ID — снова на iPhone",
             font=ui_font(13),
             text_color=THEME["muted"],
-        ).pack(anchor="w", pady=(6, 0))
+        )
+        tagline.pack(anchor="w", pady=(6, 0))
+        self._chrome_text_labels.append((tagline, "muted"))
 
         header_actions = ctk.CTkFrame(header, fg_color="transparent")
         header_actions.grid(row=0, column=2, rowspan=2, padx=(0, 20), pady=16, sticky="e")
@@ -188,17 +214,20 @@ class RestoreIosApp(ctk.CTk):
         )
         self.version_label.pack(side="left", padx=(0, 10))
         self.version_label.bind("<Button-1>", self._on_version_click)
+        self._chrome_text_labels.append((self.version_label, "muted"))
 
-        secondary_button(
+        self.update_button = secondary_button(
             header_actions,
             text="Обновить",
             width=108,
             height=42,
             font=ui_font(13, weight="bold"),
             command=self._check_updates,
-        ).pack(side="left", padx=(0, 8))
+        )
+        self.update_button.pack(side="left", padx=(0, 8))
+        self._secondary_buttons.append(self.update_button)
 
-        primary_button(
+        self.help_button = primary_button(
             header_actions,
             text="?",
             width=42,
@@ -206,11 +235,15 @@ class RestoreIosApp(ctk.CTk):
             corner_radius=21,
             font=ui_font(20, weight="bold"),
             command=self._show_help,
-        ).pack(side="left")
+        )
+        self.help_button.pack(side="left")
+        self._primary_buttons.append(self.help_button)
 
         sidebar = glass_frame(self, width=290)
         sidebar.grid(row=1, column=0, sticky="nsw", padx=(16, 8), pady=12)
         sidebar.grid_propagate(False)
+        self._sidebar = sidebar
+        self._chrome_frames.append(sidebar)
 
         self._section_label(sidebar, "Apple ID")
         self.auth_status_label = ctk.CTkLabel(
@@ -221,6 +254,7 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["muted"],
         )
         self.auth_status_label.pack(anchor="w", padx=16, pady=(0, 10))
+        self._chrome_text_labels.append((self.auth_status_label, "muted"))
 
         self._action_button(sidebar, "Войти в Apple ID", self._login_dialog).pack(fill="x", padx=14, pady=4)
         self._action_button(sidebar, "Проверить вход", self._update_auth_status, secondary=True).pack(
@@ -239,11 +273,42 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["muted"],
         )
         self.readiness_label.pack(anchor="w", padx=16, pady=(0, 10))
+        self._chrome_text_labels.append((self.readiness_label, "muted"))
 
         self._action_button(sidebar, "Проверить iPhone", self._check_device).pack(fill="x", padx=14, pady=4)
         self._action_button(sidebar, "Установить драйверы Apple", self._install_drivers, secondary=True).pack(
             fill="x", padx=14, pady=4
         )
+
+        self._section_label(sidebar, "Тема", top_pad=20)
+        theme_hint = ctk.CTkLabel(
+            sidebar,
+            text="Светлая или тёмная — сохраняется",
+            wraplength=250,
+            justify="left",
+            text_color=THEME["muted"],
+            font=ui_font(12),
+        )
+        theme_hint.pack(anchor="w", padx=16, pady=(0, 8))
+        self._chrome_text_labels.append((theme_hint, "muted"))
+
+        self.theme_segment = ctk.CTkSegmentedButton(
+            sidebar,
+            values=["Светлая", "Тёмная"],
+            command=self._on_theme_segment,
+            font=ui_font(13, weight="bold"),
+            height=36,
+            corner_radius=12,
+            fg_color=THEME["chip"],
+            selected_color=THEME["accent"],
+            selected_hover_color=THEME["accent_hover"],
+            unselected_color=THEME["chip"],
+            unselected_hover_color=THEME["bg_soft"],
+            text_color=THEME["text"],
+            text_color_disabled=THEME["muted"],
+        )
+        self.theme_segment.pack(fill="x", padx=14, pady=(0, 12))
+        self.theme_segment.set("Тёмная" if is_dark_theme() else "Светлая")
 
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.grid(row=1, column=1, sticky="nsew", padx=(8, 16), pady=12)
@@ -253,6 +318,8 @@ class RestoreIosApp(ctk.CTk):
         top_bar = glass_frame(main)
         top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         top_bar.grid_columnconfigure(1, weight=1)
+        self._top_bar = top_bar
+        self._chrome_frames.append(top_bar)
 
         self.selected_icon_label = ctk.CTkLabel(top_bar, text="")
         self.selected_icon_label.grid(row=0, column=0, padx=(16, 10), pady=14)
@@ -267,6 +334,7 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["silver"],
         )
         self.selected_label.pack(anchor="w")
+        self._chrome_text_labels.append((self.selected_label, "silver"))
 
         self.selected_meta_label = ctk.CTkLabel(
             info_wrap,
@@ -274,6 +342,7 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["muted"],
         )
         self.selected_meta_label.pack(anchor="w", pady=(2, 0))
+        self._chrome_text_labels.append((self.selected_meta_label, "muted"))
 
         self.install_button = primary_button(
             top_bar,
@@ -284,6 +353,7 @@ class RestoreIosApp(ctk.CTk):
             font=ui_font(14, weight="bold"),
         )
         self.install_button.grid(row=0, column=2, padx=(8, 18), pady=16)
+        self._primary_buttons.append(self.install_button)
         bind_press_feedback(self._anim, self.install_button)
 
         catalog_nav = ctk.CTkFrame(main, fg_color="transparent")
@@ -298,6 +368,7 @@ class RestoreIosApp(ctk.CTk):
             height=32,
         )
         self.catalog_back_button.grid(row=0, column=0, sticky="w")
+        self._secondary_buttons.append(self.catalog_back_button)
 
         self.catalog_path_label = ctk.CTkLabel(
             catalog_nav,
@@ -307,6 +378,7 @@ class RestoreIosApp(ctk.CTk):
             anchor="w",
         )
         self.catalog_path_label.grid(row=0, column=1, sticky="w", padx=(10, 0))
+        self._chrome_text_labels.append((self.catalog_path_label, "silver"))
 
         self.bank_search_var = tk.StringVar()
         self.bank_search_entry = ctk.CTkEntry(
@@ -336,6 +408,7 @@ class RestoreIosApp(ctk.CTk):
         log_frame.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         log_frame.grid_columnconfigure(0, weight=1)
         self._log_frame = log_frame
+        self._chrome_frames.append(log_frame)
 
         self.log_title = ctk.CTkLabel(
             log_frame,
@@ -344,6 +417,7 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["text"],
         )
         self.log_title.grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
+        self._chrome_text_labels.append((self.log_title, "text"))
 
         self.progress_frame = ctk.CTkFrame(log_frame, fg_color="transparent")
         self.progress_frame.grid(row=1, column=0, sticky="ew", padx=14, pady=(8, 8))
@@ -358,6 +432,7 @@ class RestoreIosApp(ctk.CTk):
             font=ui_font(13),
         )
         self.progress_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self._chrome_text_labels.append((self.progress_label, "muted"))
 
         self.phases_row = ctk.CTkFrame(self.progress_frame, fg_color="transparent")
         self.phases_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
@@ -401,13 +476,16 @@ class RestoreIosApp(ctk.CTk):
         self.log_title.grid_remove()
         self.log_box.grid_remove()
 
-    def _section_label(self, parent: ctk.CTkFrame, text: str, *, top_pad: int = 12) -> None:
-        ctk.CTkLabel(
+    def _section_label(self, parent: ctk.CTkFrame, text: str, *, top_pad: int = 12) -> ctk.CTkLabel:
+        label = ctk.CTkLabel(
             parent,
             text=text,
             font=ui_font(14, weight="bold"),
             text_color=THEME["silver"],
-        ).pack(anchor="w", padx=16, pady=(top_pad, 8))
+        )
+        label.pack(anchor="w", padx=16, pady=(top_pad, 8))
+        self._chrome_text_labels.append((label, "silver"))
+        return label
 
     def _action_button(
         self,
@@ -418,8 +496,116 @@ class RestoreIosApp(ctk.CTk):
         secondary: bool = False,
     ) -> ctk.CTkButton:
         if secondary:
-            return secondary_button(parent, text=text, command=command)
-        return primary_button(parent, text=text, command=command)
+            button = secondary_button(parent, text=text, command=command)
+            self._secondary_buttons.append(button)
+            return button
+        button = primary_button(parent, text=text, command=command)
+        self._primary_buttons.append(button)
+        return button
+
+    def _on_theme_segment(self, value: str) -> None:
+        mode = "dark" if value == "Тёмная" else "light"
+        self._apply_theme_mode(mode)
+
+    def _apply_theme_mode(self, mode: str) -> None:
+        if self._theme_applying:
+            return
+        self._theme_applying = True
+        try:
+            normalized = apply_theme(mode)
+            if self.settings.theme_mode != normalized:
+                self.settings.theme_mode = normalized
+            ctk.set_appearance_mode(normalized)
+            apply_glass_window(self, dark=normalized == "dark")
+            self._recolor_chrome()
+            self._refresh_app_list()
+            self._render_recent_searches()
+            desired = "Тёмная" if normalized == "dark" else "Светлая"
+            if hasattr(self, "theme_segment") and self.theme_segment.get() != desired:
+                self.theme_segment.set(desired)
+            self._toast("Тема: тёмная" if normalized == "dark" else "Тема: светлая", kind="info")
+        finally:
+            self._theme_applying = False
+
+    def _recolor_chrome(self) -> None:
+        try:
+            self.configure(fg_color=THEME["bg"])
+        except tk.TclError:
+            pass
+
+        for frame in self._chrome_frames:
+            try:
+                frame.configure(fg_color=THEME["glass"], border_color=THEME["glass_border"])
+            except tk.TclError:
+                continue
+
+        for label, key in self._chrome_text_labels:
+            try:
+                label.configure(text_color=THEME[key])
+            except tk.TclError:
+                continue
+
+        for button in self._primary_buttons:
+            try:
+                button.configure(
+                    fg_color=THEME["accent"],
+                    hover_color=THEME["accent_hover"],
+                    text_color=THEME["accent_text"],
+                )
+            except tk.TclError:
+                continue
+
+        for button in self._secondary_buttons:
+            try:
+                button.configure(
+                    fg_color=THEME["chip"],
+                    hover_color=THEME["bg_soft"],
+                    text_color=THEME["text"],
+                )
+            except tk.TclError:
+                continue
+
+        try:
+            self.bank_search_entry.configure(
+                fg_color=THEME["input"],
+                border_color=THEME["glass_border"],
+                text_color=THEME["text"],
+            )
+        except tk.TclError:
+            pass
+
+        try:
+            self.progress_bar.configure(
+                progress_color=THEME["accent"],
+                fg_color=THEME["glass_border"],
+            )
+        except tk.TclError:
+            pass
+
+        try:
+            self.log_box.configure(
+                fg_color=THEME["log"],
+                border_color=THEME["glass_border"],
+                text_color=THEME["silver"],
+            )
+        except tk.TclError:
+            pass
+
+        if hasattr(self, "theme_segment"):
+            try:
+                self.theme_segment.configure(
+                    fg_color=THEME["chip"],
+                    selected_color=THEME["accent"],
+                    selected_hover_color=THEME["accent_hover"],
+                    unselected_color=THEME["chip"],
+                    unselected_hover_color=THEME["bg_soft"],
+                    text_color=THEME["text"],
+                    text_color_disabled=THEME["muted"],
+                )
+            except tk.TclError:
+                pass
+
+        self._reset_phases()
 
     def _log(self, message: str) -> None:
         if not getattr(self, "log_box", None):
@@ -916,6 +1102,238 @@ class RestoreIosApp(ctk.CTk):
 
         self._run_async(task)
 
+    def _open_update_in_browser(self, setup_url: str | None = None) -> None:
+        url = resolve_browser_download_url(setup_url or self._last_setup_url)
+        self._log(f"Открыта страница загрузки в браузере:\n{url}")
+        webbrowser.open(url)
+
+    def _show_update_action_dialog(
+        self,
+        *,
+        title: str,
+        message: str,
+        primary_text: str,
+        on_primary: Callable[[], None] | None = None,
+        secondary_text: str = "",
+        on_secondary: Callable[[], None] | None = None,
+        tertiary_text: str = "Закрыть",
+        browser_url: str | None = None,
+        link_text: str | None = None,
+        on_link: Callable[[], None] | None = None,
+    ) -> None:
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(title)
+        dialog.geometry("520x360")
+        dialog.minsize(480, 320)
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.configure(fg_color=THEME["bg"])
+        dialog.after(50, lambda: apply_glass_window(dialog, dark=is_dark_theme()))
+        fade_in_window(dialog)
+
+        card = glass_frame(dialog)
+        card.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(
+            card,
+            text=title,
+            font=ui_font(18, weight="bold"),
+            text_color=THEME["text"],
+            anchor="w",
+        ).pack(anchor="w", padx=18, pady=(16, 8))
+
+        ctk.CTkLabel(
+            card,
+            text=message,
+            font=ui_font(13),
+            text_color=THEME["text_secondary"],
+            justify="left",
+            anchor="nw",
+            wraplength=450,
+        ).pack(anchor="w", fill="both", expand=True, padx=18, pady=(0, 8))
+
+        if link_text:
+
+            def _link() -> None:
+                if on_link:
+                    on_link()
+                else:
+                    self._open_update_in_browser(browser_url)
+
+            ghost_button(card, text=link_text, command=_link, anchor="w").pack(
+                anchor="w", padx=14, pady=(0, 8)
+            )
+
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(fill="x", padx=14, pady=(8, 16))
+
+        def close_then(action: Callable[[], None] | None) -> None:
+            dialog.destroy()
+            if action:
+                action()
+
+        primary_button(
+            buttons,
+            text=primary_text,
+            command=lambda: close_then(on_primary),
+            width=180,
+            height=40,
+        ).pack(side="right")
+
+        if secondary_text:
+            secondary_button(
+                buttons,
+                text=secondary_text,
+                command=lambda: close_then(on_secondary),
+                width=280 if len(secondary_text) > 12 else 120,
+                height=40,
+                font=ui_font(12),
+            ).pack(side="right", padx=(0, 8))
+
+        if tertiary_text:
+            secondary_button(
+                buttons,
+                text=tertiary_text,
+                command=dialog.destroy,
+                width=100,
+                height=40,
+            ).pack(side="left")
+
+    def _download_update(self, result: UpdateCheckResult) -> None:
+        if not result.setup_url:
+            self._show_update_action_dialog(
+                title="Обновление",
+                message=(
+                    "Ссылка на установщик не указана в манифесте обновлений.\n"
+                    "Можно открыть страницу релизов в браузере."
+                ),
+                primary_text="Открыть в браузере",
+                on_primary=lambda: self._open_update_in_browser(None),
+                secondary_text="",
+                tertiary_text="Закрыть",
+            )
+            return
+        if not result.sha256:
+            self._show_update_action_dialog(
+                title="Обновление",
+                message=(
+                    "В манифесте нет SHA256 установщика.\n"
+                    "Встроенная загрузка отменена — так безопаснее.\n\n"
+                    "Скачайте установщик в браузере с официальной страницы релизов."
+                ),
+                primary_text="Открыть в браузере",
+                on_primary=lambda: self._open_update_in_browser(result.setup_url),
+                secondary_text="",
+                tertiary_text="Закрыть",
+                browser_url=result.setup_url,
+            )
+            return
+
+        def download_task() -> None:
+            self.after(0, lambda: self._set_progress("Скачивание обновления...", 0.05))
+
+            def on_progress(ratio: float) -> None:
+                self.after(
+                    0,
+                    lambda r=ratio: self._set_progress(
+                        f"Скачивание обновления... {int(r * 100)}%",
+                        0.05 + r * 0.9,
+                    ),
+                )
+
+            try:
+                installer = download_verified_installer(
+                    setup_url=result.setup_url,
+                    expected_sha256=result.sha256,
+                    version=result.latest_version,
+                    on_progress=on_progress,
+                )
+            except UpdateCheckError as exc:
+                message = str(exc)
+                self.after(0, lambda m=message: self._log(m))
+                self.after(
+                    0,
+                    lambda m=message: self._show_update_action_dialog(
+                        title="Не удалось скачать обновление",
+                        message=(
+                            f"{m}\n\n"
+                            "Встроенная загрузка иногда недоступна (блокировка GitHub/CDN, "
+                            "антивирус, прокси), даже если браузер открывает ту же ссылку.\n"
+                            "Повторите попытку или скачайте в браузере."
+                        ),
+                        primary_text="Повторить",
+                        on_primary=lambda: self._download_update(result),
+                        secondary_text="Открыть страницу загрузки в браузере",
+                        on_secondary=lambda: self._open_update_in_browser(result.setup_url),
+                        tertiary_text="Закрыть",
+                    ),
+                )
+                return
+
+            self.after(0, lambda: self._set_progress("Проверка завершена", 1.0))
+            self.after(0, lambda: self._log(f"Установщик проверен: {installer.name}"))
+
+            def launch() -> None:
+                try:
+                    os.startfile(str(installer))  # noqa: S606 — verified local Setup.exe
+                    self._log("Запущен проверенный установщик.")
+                except OSError as exc:
+                    self._show_update_action_dialog(
+                        title="Обновление",
+                        message=(
+                            f"Файл проверен, но не удалось открыть установщик:\n{exc}\n\n"
+                            f"Откройте вручную:\n{installer}\n\n"
+                            "Или скачайте заново в браузере."
+                        ),
+                        primary_text="Открыть в браузере",
+                        on_primary=lambda: self._open_update_in_browser(result.setup_url),
+                        secondary_text="",
+                        tertiary_text="Закрыть",
+                        browser_url=result.setup_url,
+                    )
+
+            self.after(0, launch)
+
+        self._run_async(download_task)
+
+    def _present_update_available(self, result: UpdateCheckResult) -> None:
+        if result.setup_url:
+            self._last_setup_url = result.setup_url
+        notes = f"\n\n{result.notes}" if result.notes else ""
+        message = (
+            f"Доступна новая версия {result.latest_version}.\n"
+            f"Текущая версия: {result.current_version}.{notes}\n\n"
+            "Рекомендуем скачать в приложении — файл проверяется по SHA256."
+        )
+        self._show_update_action_dialog(
+            title="Доступно обновление",
+            message=message,
+            primary_text="Скачать в приложении",
+            on_primary=lambda: self._download_update(result),
+            secondary_text="Позже",
+            on_secondary=None,
+            tertiary_text="",
+            browser_url=result.setup_url,
+            link_text="Скачать в браузере",
+            on_link=lambda: self._open_update_in_browser(result.setup_url),
+        )
+
+    def _present_update_check_failure(self, message: str) -> None:
+        self._show_update_action_dialog(
+            title="Не удалось проверить обновления",
+            message=(
+                f"{message}\n\n"
+                "Проверка из приложения может не пройти, даже если сайт GitHub "
+                "открывается в браузере (другой путь сети, TLS, блокировка CDN)."
+            ),
+            primary_text="Повторить",
+            on_primary=self._check_updates,
+            secondary_text="Открыть страницу загрузки в браузере",
+            on_secondary=lambda: self._open_update_in_browser(self._last_setup_url),
+            tertiary_text="Закрыть",
+        )
+
     def _check_updates(self) -> None:
         def task() -> None:
             self.after(0, lambda: self._log("Проверка обновлений..."))
@@ -925,7 +1343,7 @@ class RestoreIosApp(ctk.CTk):
                 message = str(exc)
                 self.after(0, lambda m=message: self._log(f"Обновление: {m}"))
                 self.after(0, lambda: self._toast("Не удалось проверить обновления", kind="warning"))
-                self.after(0, lambda m=message: messagebox.showwarning("Обновление", m))
+                self.after(0, lambda m=message: self._present_update_check_failure(m))
                 return
             except Exception as exc:  # noqa: BLE001 — surface unexpected transport bugs
                 message = (
@@ -933,8 +1351,11 @@ class RestoreIosApp(ctk.CTk):
                     f"{type(exc).__name__}: {exc}"
                 )
                 self.after(0, lambda m=message: self._log(f"Обновление: {m}"))
-                self.after(0, lambda m=message: messagebox.showerror("Обновление", m))
+                self.after(0, lambda m=message: self._present_update_check_failure(m))
                 return
+
+            if result.setup_url:
+                self._last_setup_url = result.setup_url
 
             if result.is_up_to_date:
                 text = f"У вас актуальная версия ({result.current_version})."
@@ -943,75 +1364,8 @@ class RestoreIosApp(ctk.CTk):
                 self.after(0, lambda: messagebox.showinfo("Обновление", text))
                 return
 
-            notes = f"\n\n{result.notes}" if result.notes else ""
-            prompt = (
-                f"Доступна новая версия {result.latest_version}.\n"
-                f"Текущая версия: {result.current_version}.{notes}\n\n"
-                "Скачать установщик и проверить SHA256?"
-            )
             self.after(0, lambda: self._log(f"Доступна версия {result.latest_version}."))
-
-            def ask_download() -> None:
-                if not messagebox.askyesno("Доступно обновление", prompt):
-                    return
-                if not result.setup_url:
-                    messagebox.showwarning(
-                        "Обновление",
-                        "Ссылка на установщик не указана в манифесте обновлений.",
-                    )
-                    return
-                if not result.sha256:
-                    messagebox.showerror(
-                        "Обновление",
-                        "В манифесте нет SHA256 установщика.\n"
-                        "Обновление отменено — так безопаснее.",
-                    )
-                    return
-
-                def download_task() -> None:
-                    self.after(0, lambda: self._set_progress("Скачивание обновления...", 0.05))
-
-                    def on_progress(ratio: float) -> None:
-                        self.after(
-                            0,
-                            lambda r=ratio: self._set_progress(
-                                f"Скачивание обновления... {int(r * 100)}%",
-                                0.05 + r * 0.9,
-                            ),
-                        )
-
-                    try:
-                        installer = download_verified_installer(
-                            setup_url=result.setup_url,
-                            expected_sha256=result.sha256,
-                            version=result.latest_version,
-                            on_progress=on_progress,
-                        )
-                    except UpdateCheckError as exc:
-                        message = str(exc)
-                        self.after(0, lambda m=message: self._log(m))
-                        self.after(0, lambda m=message: messagebox.showerror("Обновление", m))
-                        return
-
-                    self.after(0, lambda: self._set_progress("Проверка завершена", 1.0))
-                    self.after(0, lambda: self._log(f"Установщик проверен: {installer.name}"))
-
-                    def launch() -> None:
-                        try:
-                            os.startfile(str(installer))  # noqa: S606 — verified local Setup.exe
-                            self._log("Запущен проверенный установщик.")
-                        except OSError as exc:
-                            messagebox.showerror(
-                                "Обновление",
-                                f"Файл проверен, но не удалось открыть установщик:\n{exc}\n\n"
-                                f"Откройте вручную:\n{installer}",
-                            )
-
-                    self.after(0, launch)
-
-                self._run_async(download_task)
-
-            self.after(0, ask_download)
+            self.after(0, lambda: self._present_update_available(result))
 
         self._run_async(task)
 
@@ -1586,7 +1940,7 @@ class RestoreIosApp(ctk.CTk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(fg_color=THEME["bg"])
-        dialog.after(50, lambda: apply_glass_window(dialog))
+        dialog.after(50, lambda: apply_glass_window(dialog, dark=is_dark_theme()))
         fade_in_window(dialog)
 
         if logo := self.icon_loader.get_logo(36):
