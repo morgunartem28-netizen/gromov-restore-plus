@@ -6,11 +6,13 @@ import re
 import secrets
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from app_paths import data_dir, install_dir, tools_dir
+from app_paths import data_dir, install_dir, is_frozen, tools_dir
+from dpapi_store import delete_secret, load_secret, save_secret
 from ipa_utils import cleanup_download_artifacts, is_valid_ipa, read_ipa_bundle_id
 from security_utils import protect_sensitive_file, protect_sensitive_tree, redact_secrets
 from subprocess_utils import popen_hidden, run_hidden
@@ -21,6 +23,10 @@ class IpatoolError(RuntimeError):
 
 
 class IpatoolTwoFactorRequired(IpatoolError):
+    pass
+
+
+class IpatoolCancelled(IpatoolError):
     pass
 
 
@@ -40,16 +46,43 @@ class IpatoolClient:
         self.ipatool_path = ipatool_path or self._resolve_ipatool()
         self.log_path = self.data_root / "ipatool.log"
         self.keychain_pass_path = self.data_root / "keychain.pass"
+        self._active_proc: subprocess.Popen[str] | None = None
+        self._proc_lock = threading.Lock()
+        self._cancel = threading.Event()
         if self.keychain_pass_path.exists():
             protect_sensitive_file(self.keychain_pass_path)
+        self._migrate_legacy_keychain_pass()
         self._scrub_legacy_secret_logs()
 
     @staticmethod
     def _ipatool_home() -> Path:
         return Path.home() / ".ipatool"
 
+    def request_cancel(self) -> None:
+        self._cancel.set()
+        with self._proc_lock:
+            proc = self._active_proc
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+    def clear_cancel(self) -> None:
+        self._cancel.clear()
+
+    def _migrate_legacy_keychain_pass(self) -> None:
+        """Re-encrypt legacy keychain.pass with DPAPI when possible."""
+        try:
+            if not self.keychain_pass_path.exists():
+                return
+            secret = load_secret(self.keychain_pass_path)
+            if secret:
+                save_secret(self.keychain_pass_path, secret)
+        except OSError:
+            pass
+
     def _scrub_legacy_secret_logs(self) -> None:
-        """Drop historical logs that may contain plaintext --password values."""
         try:
             if not self.log_path.exists():
                 return
@@ -64,106 +97,117 @@ class IpatoolClient:
             pass
 
     def _resolve_ipatool(self) -> str:
-        from_env = os.environ.get("IPATOOL_PATH")
-        if from_env and Path(from_env).exists():
-            return from_env
-
-        found = shutil.which("ipatool")
-        if found:
-            return found
+        # Frozen builds must use bundled tool only (prevents PATH/env hijack).
+        if not is_frozen():
+            from_env = os.environ.get("IPATOOL_PATH")
+            if from_env and Path(from_env).exists():
+                return from_env
+            found = shutil.which("ipatool")
+            if found:
+                return found
 
         local = tools_dir() / "ipatool.exe"
         if local.exists():
             return str(local)
 
         raise IpatoolError(
-            "ipatool не найден. Скачайте ipatool для Windows с "
-            "https://github.com/majd/ipatool/releases и положите в tools/ipatool.exe "
-            "или добавьте в PATH."
+            "ipatool не найден. Переустановите приложение из официального Setup "
+            "или положите tools/ipatool.exe рядом с программой."
         )
 
     def _keychain_passphrase(self) -> str:
-        if self.keychain_pass_path.exists():
-            passphrase = self.keychain_pass_path.read_text(encoding="utf-8").strip()
-            if passphrase:
-                protect_sensitive_file(self.keychain_pass_path)
-                return passphrase
+        existing = load_secret(self.keychain_pass_path)
+        if existing:
+            return existing
         passphrase = secrets.token_urlsafe(24)
-        self.keychain_pass_path.write_text(passphrase, encoding="utf-8")
-        protect_sensitive_file(self.keychain_pass_path)
+        save_secret(self.keychain_pass_path, passphrase)
         return passphrase
 
     def clear_local_session_secrets(self) -> None:
-        """Remove local passphrase and ipatool session cookies after logout."""
-        try:
-            if self.keychain_pass_path.exists():
-                self.keychain_pass_path.unlink()
-        except OSError:
-            pass
-
+        """Full local session wipe — as if the user never signed in."""
+        delete_secret(self.keychain_pass_path)
         ipatool_home = self._ipatool_home()
-        cookies = ipatool_home / "cookies"
         try:
-            if cookies.exists():
-                cookies.unlink()
+            if ipatool_home.exists():
+                shutil.rmtree(ipatool_home, ignore_errors=True)
         except OSError:
             pass
-        protect_sensitive_tree(ipatool_home)
+        # Recreate empty hardened dir so next login starts clean.
+        try:
+            ipatool_home.mkdir(parents=True, exist_ok=True)
+            protect_sensitive_tree(ipatool_home)
+        except OSError:
+            pass
 
     def harden_session_store(self) -> None:
-        """Best-effort ACL lockdown for ~/.ipatool after login."""
         protect_sensitive_tree(self._ipatool_home())
         if self.keychain_pass_path.exists():
             protect_sensitive_file(self.keychain_pass_path)
 
     def _log_run(self, args: list[str], completed: subprocess.CompletedProcess[str]) -> None:
-        safe_args = []
-        skip_next = False
-        for arg in args:
-            if skip_next:
-                safe_args.append("***")
-                skip_next = False
-                continue
-            if arg in ("--password", "--auth-code", "--keychain-passphrase"):
-                safe_args.append(arg)
-                skip_next = True
-                continue
-            safe_args.append(arg)
-
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         entry = (
-            f"\n[{stamp}] {' '.join(safe_args)}\n"
+            f"\n[{stamp}] {' '.join(args)}\n"
             f"exit={completed.returncode}\n"
             f"stdout={redact_secrets(completed.stdout or '')}\n"
             f"stderr={redact_secrets(completed.stderr or '')}\n"
         )
-        with self.log_path.open("a", encoding="utf-8") as handle:
-            handle.write(entry)
+        try:
+            with self.log_path.open("a", encoding="utf-8") as handle:
+                handle.write(entry)
+            protect_sensitive_file(self.log_path)
+        except OSError:
+            pass
 
-    def _run(self, args: list[str], *, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self,
+        args: list[str],
+        *,
+        secret_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        if self._cancel.is_set():
+            raise IpatoolCancelled("Операция отменена.")
+
+        env = os.environ.copy()
+        env["IPATOOL_KEYCHAIN_PASSPHRASE"] = self._keychain_passphrase()
+        if secret_env:
+            env.update(secret_env)
+
+        # Never put password / auth-code / keychain passphrase on argv.
         command = [
             self.ipatool_path,
             *args,
             "--format",
             "json",
-            "--keychain-passphrase",
-            self._keychain_passphrase(),
             "--non-interactive",
         ]
         try:
-            completed = run_hidden(
-                command,
-                input=input_text,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
+            with self._proc_lock:
+                proc = popen_hidden(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                )
+                self._active_proc = proc
+            stdout, stderr = proc.communicate()
+            completed = subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
         except FileNotFoundError as exc:
             raise IpatoolError(f"Не удалось запустить ipatool: {self.ipatool_path}") from exc
+        finally:
+            with self._proc_lock:
+                self._active_proc = None
+            # Best-effort wipe of secret env from our dict (child already exited).
+            env.pop("IPATOOL_PASSWORD", None)
+            env.pop("IPATOOL_AUTH_CODE", None)
+            env.pop("IPATOOL_KEYCHAIN_PASSPHRASE", None)
 
         self._log_run(args, completed)
+        if self._cancel.is_set():
+            raise IpatoolCancelled("Операция отменена.")
         return completed
 
     def _parse_json(self, completed: subprocess.CompletedProcess[str]) -> dict:
@@ -194,18 +238,23 @@ class IpatoolClient:
         return self._parse_json(completed)
 
     def auth_logout(self) -> None:
-        completed = self._run(["auth", "revoke"])
+        try:
+            completed = self._run(["auth", "revoke"])
+        except IpatoolError:
+            completed = None
         self.clear_local_session_secrets()
-        if completed.returncode != 0:
-            raise IpatoolError(self.format_error(self._extract_error(completed)))
+        if completed is not None and completed.returncode != 0:
+            # Still treat local wipe as success for the user.
+            pass
 
     def auth_login(self, email: str, password: str, auth_code: str | None = None) -> dict:
         code = (auth_code or "").replace(" ", "").strip()
-        args = ["auth", "login", "--email", email, "--password", password]
+        args = ["auth", "login", "--email", email]
+        secret_env = {"IPATOOL_PASSWORD": password}
         if code:
-            args.extend(["--auth-code", code])
+            secret_env["IPATOOL_AUTH_CODE"] = code
 
-        completed = self._run(args)
+        completed = self._run(args, secret_env=secret_env)
         combined = f"{completed.stdout or ''}\n{completed.stderr or ''}".strip()
 
         if completed.returncode == 0:
@@ -240,8 +289,7 @@ class IpatoolClient:
         if "keychain passphrase is required" in lower or "failed to save account in keychain" in lower:
             return (
                 "Не удалось сохранить сессию Apple ID на этом ПК.\n"
-                "Закройте приложение, удалите папку C:\\Users\\ВАШ_ПОЛЬЗОВАТЕЛЬ\\.ipatool "
-                "и войдите снова."
+                "Выйдите из Apple ID в приложении и войдите снова."
             )
         if "unexpected hex digit" in lower or "failed to unmarshal xml" in lower:
             return (
@@ -343,7 +391,6 @@ class IpatoolClient:
             "--output",
             str(output_dir),
         ]
-        # Для удалённых из App Store приложений lookup по bundle ID всегда падает.
         if use_lookup and bundle_id:
             args.extend(["--bundle-identifier", bundle_id])
         if purchase:

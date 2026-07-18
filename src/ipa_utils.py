@@ -119,12 +119,15 @@ def purge_stale_ipa_cache(
     *,
     max_age_days: int = IPA_CACHE_MAX_AGE_DAYS,
 ) -> int:
-    """Delete *.ipa / *.ipa.tmp older than max_age_days. Never raises."""
+    """Delete *.ipa / *.ipa.tmp older than max_age_days. max_age_days=0 deletes all. Never raises."""
     removed = 0
     try:
         if not downloads_root.is_dir():
             return 0
-        cutoff = time.time() - max(1, max_age_days) * 86400
+        if max_age_days <= 0:
+            cutoff = time.time() + 1  # delete everything
+        else:
+            cutoff = time.time() - max_age_days * 86400
         for path in downloads_root.rglob("*"):
             try:
                 if not path.is_file():
@@ -132,7 +135,7 @@ def purge_stale_ipa_cache(
                 name = path.name.lower()
                 if not (name.endswith(".ipa") or name.endswith(".ipa.tmp")):
                     continue
-                if path.stat().st_mtime >= cutoff:
+                if max_age_days > 0 and path.stat().st_mtime >= cutoff:
                     continue
                 path.unlink(missing_ok=True)
                 removed += 1

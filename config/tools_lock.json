@@ -1,0 +1,10 @@
+{
+    "ipatool.exe":  {
+                        "sha256":  "1e5f458b7a3f0a5827decf8dbf9ef414e2941aae1d2c7f5d0f2958b0edf3fe21",
+                        "note":  "Patched local build: secrets via IPATOOL_PASSWORD / IPATOOL_KEYCHAIN_PASSPHRASE env (no argv)"
+                    },
+    "ios.exe":  {
+                    "sha256":  "6ea59513a0b1470f9ad536624d87592980c205e1b75a1fc6a55f89f5e4edd891",
+                    "note":  "go-ios pinned; do not auto-download latest"
+                }
+}

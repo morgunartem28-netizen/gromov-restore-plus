@@ -159,13 +159,17 @@ class AppleLoginDialog(ctk.CTkToplevel):
 
         self.login_button.configure(state="disabled")
         self._set_status("Подключение к App Store...")
+        # Clear password from the widget immediately; keep a local copy for this attempt / 2FA retry.
+        self.password_entry.delete(0, "end")
+        self.code_entry.delete(0, "end")
 
         def worker() -> None:
+            nonlocal password
             try:
                 result = self.ipatool.auth_login(email, password, auth_code=code or None)
             except IpatoolTwoFactorRequired as exc:
-                # Keep password for the immediate 2FA retry; clear only the expired code field.
-                self.after(0, lambda: self.code_entry.delete(0, "end"))
+                # Restore password into the field only for the immediate 2FA retry.
+                self.after(0, lambda: self.password_entry.insert(0, password))
                 self.after(0, lambda m=str(exc): self._set_status(m, error=False))
                 self.after(0, lambda: self.code_entry.focus_set())
                 self.after(0, lambda: self.login_button.configure(state="normal"))
@@ -173,7 +177,7 @@ class AppleLoginDialog(ctk.CTkToplevel):
             except IpatoolError as exc:
                 message = IpatoolClient.format_error(str(exc))
                 if IpatoolClient.needs_two_factor(message) and not code:
-                    self.after(0, lambda: self.code_entry.delete(0, "end"))
+                    self.after(0, lambda: self.password_entry.insert(0, password))
                     self.after(
                         0,
                         lambda: self._set_status(
@@ -184,14 +188,12 @@ class AppleLoginDialog(ctk.CTkToplevel):
                     )
                     self.after(0, lambda: self.code_entry.focus_set())
                 else:
-                    self.after(0, lambda: self.password_entry.delete(0, "end"))
-                    self.after(0, lambda: self.code_entry.delete(0, "end"))
+                    password = ""
                     self.after(0, lambda m=message: self._set_status(m, error=True))
                 self.after(0, lambda: self.login_button.configure(state="normal"))
                 return
 
-            self.after(0, lambda: self.password_entry.delete(0, "end"))
-            self.after(0, lambda: self.code_entry.delete(0, "end"))
+            password = ""
             self.after(0, lambda: self._set_status("Вход выполнен."))
             self.after(0, lambda: self.on_success(result, email))
             self.after(0, self.destroy)

@@ -9,55 +9,59 @@ New-Item -ItemType Directory -Force -Path $tools, $drivers | Out-Null
 
 function Ensure-GoIos {
     $ios = Join-Path $tools "ios.exe"
-    if (Test-Path $ios) {
-        Write-Host "go-ios: already present"
-        return
+    $lockPath = Join-Path $root "config\tools_lock.json"
+    if (-not (Test-Path $ios)) {
+        throw "tools\ios.exe missing. Place the pinned go-ios binary manually — auto-download of latest is disabled."
     }
-    Write-Host "Downloading go-ios..."
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/danielpaulus/go-ios/releases/latest" -Headers @{ "User-Agent" = "DIVIZION-Build" }
-    $asset = $release.assets | Where-Object { $_.name -match "windows.*amd64.*\.zip$" -or $_.name -eq "go-ios-win.zip" } | Select-Object -First 1
-    if (-not $asset) {
-        $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+    if (Test-Path $lockPath) {
+        $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
+        $expected = [string]$lock.'ios.exe'.sha256
+        if ($expected) {
+            $actual = (Get-FileHash $ios -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected.ToLowerInvariant()) {
+                throw "tools\ios.exe SHA256 mismatch. Expected $expected, got $actual"
+            }
+            Write-Host "go-ios: pinned hash OK"
+            return
+        }
     }
-    if (-not $asset) { throw "go-ios release asset not found" }
-    $zip = Join-Path $env:TEMP "go-ios.zip"
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing
-    Expand-Archive -Path $zip -DestinationPath (Join-Path $env:TEMP "go-ios-extract") -Force
-    $found = Get-ChildItem -Path (Join-Path $env:TEMP "go-ios-extract") -Recurse -Filter "ios.exe" | Select-Object -First 1
-    if (-not $found) { throw "ios.exe not found in go-ios archive" }
-    Copy-Item $found.FullName $ios -Force
-    Write-Host "go-ios: saved to tools/ios.exe"
+    Write-Host "go-ios: present (no hash pin found)"
 }
 
 function Ensure-Ipatool {
     $ipatool = Join-Path $tools "ipatool.exe"
-    if (Test-Path $ipatool) {
-        Write-Host "ipatool: already present"
-        return
-    }
     $src = Join-Path $root "build\ipatool-src"
+    # Always rebuild from patched sources when available — never auto-download "latest".
     if (Test-Path $src) {
         $go = Get-Command go -ErrorAction SilentlyContinue
-        if ($go) {
-            Write-Host "Building ipatool from source..."
-            Push-Location $src
-            & go build -o $ipatool .
-            Pop-Location
-            if (Test-Path $ipatool) {
-                Write-Host "ipatool: built successfully"
-                return
+        if (-not $go) { throw "Go toolchain required to build patched ipatool from build\ipatool-src" }
+        Write-Host "Building patched ipatool from source..."
+        Push-Location $src
+        & go build -o $ipatool .
+        $code = $LASTEXITCODE
+        Pop-Location
+        if ($code -ne 0 -or -not (Test-Path $ipatool)) {
+            throw "Failed to build ipatool from source"
+        }
+        $hash = (Get-FileHash $ipatool -Algorithm SHA256).Hash.ToLowerInvariant()
+        Write-Host "ipatool: built ($hash)"
+        $lockPath = Join-Path $root "config\tools_lock.json"
+        if (Test-Path $lockPath) {
+            $lock = Get-Content $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($lock.'ipatool.exe') {
+                $lock.'ipatool.exe'.sha256 = $hash
+                $json = $lock | ConvertTo-Json -Depth 5
+                [System.IO.File]::WriteAllText($lockPath, $json, [System.Text.UTF8Encoding]::new($false))
+                Write-Host "tools_lock.json: ipatool.exe hash updated"
             }
         }
-    }
-    Write-Host "Downloading ipatool release..."
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/majd/ipatool/releases/latest" -Headers @{ "User-Agent" = "DIVIZION-Build" }
-    $asset = $release.assets | Where-Object { $_.name -match "windows.*amd64" -or $_.name -like "*windows*" } | Select-Object -First 1
-    if ($asset) {
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $ipatool -UseBasicParsing
-        Write-Host "ipatool: downloaded"
         return
     }
-    throw "ipatool.exe not found. Place patched build in tools\ipatool.exe"
+    if (Test-Path $ipatool) {
+        Write-Host "ipatool: using existing tools\ipatool.exe (no ipatool-src)"
+        return
+    }
+    throw "ipatool.exe not found. Place patched build in tools\ipatool.exe or provide build\ipatool-src"
 }
 
 function Ensure-AppleDrivers {

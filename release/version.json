@@ -1,6 +1,6 @@
 {
-  "version": "1.1.5",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.1.5/GROMOV-RestorePlus-Setup.exe",
-  "sha256": "a3e7690032b9051f05c77c99a849ecb1b9c07d0494f39f3511a27f3679378297",
-  "notes": "Безопасность и стабильность: проверка SHA256 обновлений, скрытый журнал, автоочистка IPA через 7 дней, полный выход из Apple ID, исправление зависания при старте (логотип), каталог Банки без подвисаний. В установщик снова входят tools и drivers."
+  "version": "1.2.1",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.1/GROMOV-RestorePlus-Setup.exe",
+  "sha256": "e507bd2f9ebd2c2cf8f36792cb915d235083b0dc2c89763151f4d76b9c0073b5",
+  "notes": "Крупное обновление: секреты Apple ID не в argv (env + DPAPI), полный выход из аккаунта, очередь установок с UDID, понятные ошибки, упрощённый UI, диалог «Проверить iPhone», закреплённые tools, очистка данных при удалении."
 }

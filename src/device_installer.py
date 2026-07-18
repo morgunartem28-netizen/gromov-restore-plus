@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
-from app_paths import data_dir, tools_dir
+from app_paths import data_dir, is_frozen, tools_dir
 from ipa_utils import is_valid_ipa, read_ipa_bundle_id
 from subprocess_utils import popen_hidden, run_hidden
 
@@ -17,20 +20,74 @@ class DeviceInstallerError(RuntimeError):
     pass
 
 
+class DeviceInstallCancelled(DeviceInstallerError):
+    pass
+
+
+@dataclass(frozen=True)
+class DeviceInfo:
+    udid: str
+    name: str
+    model: str
+    ios_version: str
+    connection: str = "USB"
+    battery: str = ""
+
+    @property
+    def label(self) -> str:
+        parts = [self.name or "iPhone"]
+        if self.model:
+            parts.append(self.model)
+        if self.ios_version:
+            parts.append(f"iOS {self.ios_version}")
+        return " · ".join(parts)
+
+    @property
+    def detail_lines(self) -> str:
+        lines = [
+            f"Имя: {self.name or '—'}",
+            f"Модель: {self.model or '—'}",
+            f"iOS: {self.ios_version or '—'}",
+            f"UDID: {self.udid}",
+        ]
+        if self.battery:
+            lines.append(f"Заряд: {self.battery}")
+        if self.connection:
+            lines.append(f"Подключение: {self.connection}")
+        return "\n".join(lines)
+
+
 class DeviceInstaller:
     def __init__(self) -> None:
         self.go_ios_path = self._resolve_go_ios()
         self.pymobiledevice3_available = self._has_pymobiledevice3()
-        self.staging_dir = Path(tempfile.gettempdir()) / "restore-ios-apps"
+        self.staging_dir = data_dir() / "staging"
         self.staging_dir.mkdir(parents=True, exist_ok=True)
+        self._active_proc: subprocess.Popen[str] | None = None
+        self._proc_lock = threading.Lock()
+        self._cancel = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel.set()
+        with self._proc_lock:
+            proc = self._active_proc
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+    def clear_cancel(self) -> None:
+        self._cancel.clear()
 
     def _resolve_go_ios(self) -> str | None:
-        from_env = os.environ.get("GO_IOS_PATH")
-        if from_env and Path(from_env).exists():
-            return from_env
-        found = shutil.which("ios")
-        if found:
-            return found
+        if not is_frozen():
+            from_env = os.environ.get("GO_IOS_PATH")
+            if from_env and Path(from_env).exists():
+                return from_env
+            found = shutil.which("ios")
+            if found:
+                return found
         local = tools_dir() / "ios.exe"
         if local.exists():
             return str(local)
@@ -44,7 +101,6 @@ class DeviceInstaller:
         return True
 
     def _stage_ipa(self, ipa_path: Path) -> Path:
-        """go-ios on Windows ломается на путях с кириллицей — копируем во временную ASCII-папку."""
         safe_stem = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in ipa_path.stem)[:80] or "app"
         fd, staged_name = tempfile.mkstemp(prefix=f"{safe_stem}_", suffix=".ipa", dir=self.staging_dir)
         os.close(fd)
@@ -69,35 +125,130 @@ class DeviceInstaller:
             return "pymobiledevice3"
         return "не настроен"
 
-    def list_devices(self) -> list[str]:
+    def _device_name(self, udid: str) -> str:
+        if not self.go_ios_path:
+            return "iPhone"
+        try:
+            completed = run_hidden(
+                [self.go_ios_path, "devicename", f"--udid={udid}"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=8,
+            )
+        except subprocess.TimeoutExpired:
+            return "iPhone"
+        if completed.returncode != 0:
+            return "iPhone"
+        try:
+            payload = json.loads(completed.stdout or "{}")
+            name = payload.get("devicename") or payload.get("DeviceName")
+            if name:
+                return str(name)
+        except json.JSONDecodeError:
+            text = (completed.stdout or "").strip()
+            if text:
+                return text
+        return "iPhone"
+
+    def list_device_infos(self) -> list[DeviceInfo]:
         if self.go_ios_path:
             completed = run_hidden(
-                [self.go_ios_path, "list"],
+                [self.go_ios_path, "list", "--details"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
             )
             if completed.returncode != 0:
-                raise DeviceInstallerError((completed.stderr or completed.stdout).strip())
-            lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
-            return lines or ["Устройство найдено (go-ios)"]
+                # Fallback to plain list
+                plain = run_hidden(
+                    [self.go_ios_path, "list"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                if plain.returncode != 0:
+                    raise DeviceInstallerError((completed.stderr or completed.stdout or plain.stderr or "").strip())
+                try:
+                    payload = json.loads(plain.stdout or "{}")
+                    udids = payload.get("deviceList") or []
+                except json.JSONDecodeError:
+                    udids = [line.strip() for line in (plain.stdout or "").splitlines() if line.strip()]
+                devices: list[DeviceInfo] = []
+                for item in udids:
+                    udid = str(item)
+                    devices.append(
+                        DeviceInfo(
+                            udid=udid,
+                            name=self._device_name(udid),
+                            model="",
+                            ios_version="",
+                        )
+                    )
+                return devices
+
+            try:
+                payload = json.loads(completed.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise DeviceInstallerError("Не удалось прочитать список устройств.") from exc
+
+            devices = []
+            for item in payload.get("deviceList") or []:
+                if isinstance(item, str):
+                    udid = item
+                    devices.append(
+                        DeviceInfo(udid=udid, name=self._device_name(udid), model="", ios_version="")
+                    )
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                udid = str(item.get("Udid") or item.get("udid") or "").strip()
+                if not udid:
+                    continue
+                model = str(item.get("ProductType") or item.get("productType") or "")
+                ios_version = str(item.get("ProductVersion") or item.get("productVersion") or "")
+                connection = str(item.get("ConnectionType") or item.get("connectionType") or "USB")
+                name = str(
+                    item.get("DeviceName")
+                    or item.get("deviceName")
+                    or item.get("Name")
+                    or item.get("name")
+                    or ""
+                ).strip()
+                if not name:
+                    name = self._device_name(udid)
+                devices.append(
+                    DeviceInfo(
+                        udid=udid,
+                        name=name,
+                        model=model,
+                        ios_version=ios_version,
+                        connection=connection,
+                    )
+                )
+            return devices
 
         if self.pymobiledevice3_available:
             command = [sys.executable, "-m", "pymobiledevice3", "usbmux", "list"]
             completed = run_hidden(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
             if completed.returncode != 0:
                 raise DeviceInstallerError((completed.stderr or completed.stdout).strip())
+            # Best-effort: one synthetic device if any output
             lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
-            return lines
+            if not lines:
+                return []
+            return [DeviceInfo(udid="pymobiledevice3", name="iPhone", model="", ios_version="")]
 
         raise DeviceInstallerError(
             "Не настроена установка на iPhone.\n"
-            "Скачайте go-ios (ios.exe) с https://github.com/danielpaulus/go-ios/releases "
-            "и положите в tools/ios.exe\n"
-            "Или установите pymobiledevice3: pip install -r requirements-device.txt "
-            "(нужен Python 3.11–3.12 или Microsoft C++ Build Tools)."
+            "Переустановите приложение из официального Setup (нужен tools\\ios.exe)."
         )
+
+    def list_devices(self) -> list[str]:
+        return [device.label for device in self.list_device_infos()]
 
     def install_ipa(
         self,
@@ -105,7 +256,11 @@ class DeviceInstaller:
         on_progress: Callable[[float, str], None] | None = None,
         *,
         expected_bundle_id: str | None = None,
+        udid: str | None = None,
     ) -> str:
+        if self._cancel.is_set():
+            raise DeviceInstallCancelled("Операция отменена.")
+
         if not ipa_path.exists():
             raise DeviceInstallerError(f"Файл не найден: {ipa_path}")
 
@@ -117,14 +272,25 @@ class DeviceInstaller:
                 "Удалите его из папки downloads и скачайте приложение заново."
             )
 
-        devices = self.list_devices()
+        devices = self.list_device_infos()
         if not devices:
             raise DeviceInstallerError("iPhone не найден. Подключите USB и нажмите «Доверять компьютеру».")
+
+        if not udid:
+            if len(devices) > 1:
+                raise DeviceInstallerError(
+                    "Подключено несколько iPhone.\nВыберите устройство в боковой панели перед установкой."
+                )
+            udid = devices[0].udid
+        elif not any(device.udid == udid for device in devices):
+            raise DeviceInstallerError("Выбранный iPhone больше не подключён. Обновите список устройств.")
 
         if on_progress:
             on_progress(0.72, "Подготовка файла для установки...")
         install_path = self._stage_ipa(ipa_path)
         try:
+            if self._cancel.is_set():
+                raise DeviceInstallCancelled("Операция отменена.")
             if not is_valid_ipa(install_path, expected_bundle_id=expected_bundle_id):
                 raise DeviceInstallerError(
                     "Не удалось подготовить IPA для установки — файл повреждён.\n"
@@ -133,7 +299,14 @@ class DeviceInstaller:
             log_path = data_dir() / "install.log"
 
             if self.go_ios_path:
-                command = [self.go_ios_path, "install", "--path", str(install_path), "--verbose"]
+                command = [
+                    self.go_ios_path,
+                    "install",
+                    "--path",
+                    str(install_path),
+                    f"--udid={udid}",
+                    "--verbose",
+                ]
                 install_step = 0.72
 
                 def report(step: float, text: str) -> None:
@@ -143,7 +316,8 @@ class DeviceInstaller:
                         on_progress(install_step, text)
 
                 if on_progress:
-                    report(0.75, "Установка на iPhone...")
+                    report(0.75, "Передача на iPhone...")
+                with self._proc_lock:
                     proc = popen_hidden(
                         command,
                         stdout=subprocess.PIPE,
@@ -152,77 +326,52 @@ class DeviceInstaller:
                         encoding="utf-8",
                         errors="replace",
                     )
-                    output_lines: list[str] = []
-                    assert proc.stdout is not None
-                    for line in proc.stdout:
-                        output_lines.append(line)
-                        if "%" in line or "install" in line.lower() or "upload" in line.lower():
-                            report(min(0.94, install_step + 0.01), "Передача на iPhone...")
-                    completed = subprocess.CompletedProcess(
-                        command, proc.wait(), stdout="".join(output_lines), stderr=""
-                    )
-                else:
-                    completed = run_hidden(
-                        command,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                    )
+                    self._active_proc = proc
+                output_lines: list[str] = []
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    if self._cancel.is_set():
+                        try:
+                            proc.terminate()
+                        except OSError:
+                            pass
+                        raise DeviceInstallCancelled("Операция отменена.")
+                    output_lines.append(line)
+                    if "%" in line or "install" in line.lower() or "upload" in line.lower():
+                        report(min(0.94, install_step + 0.01), "Передача на iPhone...")
+                completed = subprocess.CompletedProcess(command, proc.wait(), stdout="".join(output_lines), stderr="")
+                with self._proc_lock:
+                    self._active_proc = None
+
                 output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
-                with log_path.open("a", encoding="utf-8") as handle:
-                    handle.write(f"\n--- install {install_path.name} ---\nexit={completed.returncode}\n{output}\n")
+                try:
+                    with log_path.open("a", encoding="utf-8") as handle:
+                        handle.write(f"\n--- install {install_path.name} udid={udid} ---\nexit={completed.returncode}\n{output}\n")
+                except OSError:
+                    pass
 
                 if on_progress:
                     report(0.98, "Завершение установки...")
 
                 if completed.returncode != 0:
-                    hint = (
-                        "\n\nЧто проверить на iPhone:\n"
-                        "1. Кабель USB надёжно подключён\n"
-                        "2. Нажато «Доверять этому компьютеру»\n"
-                        "3. iOS 17+: Настройки → Конфиденциальность → Режим разработчика (включить)\n"
-                        "4. Установлены Apple Devices или iTunes на ПК"
-                    )
-                    if "tunnel" in output.lower() or "agent is not running" in output.lower():
-                        hint += (
-                            "\n5. Для iOS 17+ откройте отдельный терминал и выполните:\n"
-                            "   tools\\ios.exe tunnel start\n"
-                            "   затем снова нажмите «Скачать и установить»"
-                        )
-                    if "No such file or directory" in output or "PublicStaging" in output:
-                        hint += "\n\nПуть к IPA исправлен — попробуйте установку ещё раз."
-                    if "EOF" in output:
-                        hint += (
-                            "\n\nСоединение оборвалось при передаче файла (~400 МБ).\n"
-                            "Используйте оригинальный кабель, не отключайте iPhone 2–3 минуты."
-                        )
-                    if "zip not a valid" in output.lower() or "not a valid zip" in output.lower():
-                        hint += (
-                            "\n\nФайл IPA повреждён. Приложение скачает его заново при следующей попытке."
-                        )
                     raise DeviceInstallerError(
-                        "Установка на iPhone не удалась."
-                        + hint
-                        + "\n\nТехнические детали:\n"
-                        + output.strip()
+                        "Установка на iPhone не удалась.\n"
+                        "Проверьте кабель, «Доверять компьютеру» и повторите."
                     )
                 return "Приложение установлено на iPhone. Проверьте домашний экран."
 
             if self.pymobiledevice3_available:
                 command = [sys.executable, "-m", "pymobiledevice3", "apps", "install", str(install_path)]
                 completed = run_hidden(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
-                output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
                 if completed.returncode != 0:
                     raise DeviceInstallerError(
-                        "pymobiledevice3 не смог установить IPA.\n"
-                        "Проверьте USB, «Доверять компьютеру» и Apple Devices/iTunes.\n\n"
-                        + output.strip()
+                        "Не удалось установить приложение.\n"
+                        "Проверьте USB и «Доверять компьютеру»."
                     )
-                return output.strip() or "Установка завершена."
+                return "Установка завершена."
 
             raise DeviceInstallerError(
-                "Нет инструмента для установки. Положите tools/ios.exe (go-ios) или установите pymobiledevice3."
+                "Нет инструмента для установки. Переустановите приложение из официального Setup."
             )
         finally:
             self._cleanup_staged(install_path)

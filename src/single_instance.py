@@ -100,7 +100,8 @@ def acquire_single_instance_lock() -> bool:
                 return True
             return False
         except OSError:
-            return True
+            # Fail closed: do not allow a second instance if locking is broken.
+            return False
 
     if lock_path.exists():
         stale_pid = _read_lock_pid(lock_path)
@@ -114,5 +115,5 @@ def acquire_single_instance_lock() -> bool:
         lock_path.write_text(str(os.getpid()), encoding="utf-8")
         atexit.register(lambda: lock_path.unlink(missing_ok=True))
     except OSError:
-        return True
+        return False
     return True

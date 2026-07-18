@@ -2,33 +2,39 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
-# Тёплая, воздушная палитра с мягким зелёным акцентом.
+# 2026: спокойный тёмный UI, много воздуха, один акцент, без «дашборд-шума».
 THEME = {
-    "bg": "#0C0E14",
-    "silver": "#F4F6FA",
-    "accent": "#3DDB7A",
-    "accent_hover": "#34C96E",
-    "accent_text": "#0A0F0C",
-    "muted": "#9AA3B5",
-    "glass": "#181D27",
-    "glass_hover": "#222833",
-    "glass_selected": "#1E2D24",
-    "glass_border": "#2E3848",
-    "glass_border_bright": "#465468",
-    "glass_highlight": "#2A4532",
-    "input": "#121720",
-    "log": "#10141C",
-    "skeleton": "#1A2030",
-    "skeleton_shine": "#242C3C",
+    "bg": "#090A0C",
+    "silver": "#F5F6F7",
+    "accent": "#3DDC84",
+    "accent_hover": "#32C574",
+    "accent_text": "#06140C",
+    "muted": "#8B93A1",
+    "glass": "#12151A",
+    "glass_hover": "#1A1E26",
+    "glass_selected": "#15231B",
+    "glass_border": "#242A33",
+    "glass_border_bright": "#3A4350",
+    "glass_highlight": "#1B2E22",
+    "input": "#0E1116",
+    "log": "#0E1116",
+    "skeleton": "#15181E",
+    "skeleton_shine": "#1E232C",
 }
 
-CORNER_RADIUS = 18
-CARD_PADX = 16
-CARD_PADY = 14
+CORNER_RADIUS = 20
+CARD_PADX = 18
+CARD_PADY = 16
 
 
 def ui_font(size: int, *, weight: str = "normal") -> ctk.CTkFont:
-    return ctk.CTkFont(family="Segoe UI", size=size, weight=weight)
+    # Prefer Windows 11 variable font; fall back cleanly on older systems.
+    for family in ("Segoe UI Variable", "Segoe UI"):
+        try:
+            return ctk.CTkFont(family=family, size=size, weight=weight)
+        except Exception:
+            continue
+    return ctk.CTkFont(size=size, weight=weight)
 
 
 def glass_frame(parent: ctk.CTkBaseClass, *, highlight: bool = False, **kwargs) -> ctk.CTkFrame:
@@ -47,9 +53,9 @@ def primary_button(parent: ctk.CTkBaseClass, **kwargs) -> ctk.CTkButton:
         "fg_color": THEME["accent"],
         "hover_color": THEME["accent_hover"],
         "text_color": THEME["accent_text"],
-        "corner_radius": 14,
+        "corner_radius": 16,
         "font": ui_font(14, weight="bold"),
-        "height": 40,
+        "height": 44,
     }
     defaults.update(kwargs)
     return ctk.CTkButton(parent, **defaults)
@@ -57,14 +63,14 @@ def primary_button(parent: ctk.CTkBaseClass, **kwargs) -> ctk.CTkButton:
 
 def secondary_button(parent: ctk.CTkBaseClass, **kwargs) -> ctk.CTkButton:
     defaults = {
-        "fg_color": THEME["glass"],
+        "fg_color": "transparent",
         "hover_color": THEME["glass_hover"],
         "text_color": THEME["silver"],
         "border_width": 1,
         "border_color": THEME["glass_border"],
-        "corner_radius": 14,
+        "corner_radius": 16,
         "font": ui_font(13),
-        "height": 38,
+        "height": 40,
     }
     defaults.update(kwargs)
     return ctk.CTkButton(parent, **defaults)
@@ -82,10 +88,10 @@ def skeleton_card(parent: ctk.CTkBaseClass, *, row: int, col: int) -> ctk.CTkFra
         row=row,
         column=col,
         sticky="nsew",
-        padx=(0 if col == 0 else 6, 6 if col == 0 else 0),
-        pady=6,
+        padx=(0 if col == 0 else 8, 8 if col == 0 else 0),
+        pady=8,
     )
-    icon = ctk.CTkFrame(card, fg_color=THEME["skeleton_shine"], corner_radius=12, width=48, height=48)
+    icon = ctk.CTkFrame(card, fg_color=THEME["skeleton_shine"], corner_radius=14, width=48, height=48)
     icon.grid(row=0, column=0, padx=(CARD_PADX, 12), pady=CARD_PADY)
     icon.grid_propagate(False)
 
@@ -100,13 +106,13 @@ def skeleton_card(parent: ctk.CTkBaseClass, *, row: int, col: int) -> ctk.CTkFra
 
 def empty_state(parent: ctk.CTkBaseClass, *, emoji: str, title: str, hint: str = "") -> ctk.CTkFrame:
     wrap = ctk.CTkFrame(parent, fg_color="transparent")
-    wrap.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=28)
+    wrap.grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=36)
 
-    ctk.CTkLabel(wrap, text=emoji, font=ui_font(32)).pack(anchor="w", pady=(0, 8))
+    ctk.CTkLabel(wrap, text=emoji, font=ui_font(28)).pack(anchor="w", pady=(0, 10))
     ctk.CTkLabel(
         wrap,
         text=title,
-        font=ui_font(16, weight="bold"),
+        font=ui_font(18, weight="bold"),
         text_color=THEME["silver"],
         anchor="w",
         justify="left",
@@ -120,5 +126,5 @@ def empty_state(parent: ctk.CTkBaseClass, *, emoji: str, title: str, hint: str =
             anchor="w",
             justify="left",
             wraplength=520,
-        ).pack(anchor="w", pady=(6, 0))
+        ).pack(anchor="w", pady=(8, 0))
     return wrap

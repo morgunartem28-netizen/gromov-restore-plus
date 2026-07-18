@@ -121,6 +121,14 @@ class ConfigManager:
 
     @staticmethod
     def account_dir_name(email: str) -> str:
+        """Opaque folder name — do not embed the Apple ID email in the path."""
+        import hashlib
+
+        digest = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:16]
+        return f"acct_{digest}"
+
+    @staticmethod
+    def _legacy_account_dir_name(email: str) -> str:
         normalized = email.strip().lower()
         safe = "".join(ch if ch.isalnum() or ch in "@._-+'" else "_" for ch in normalized)
         return safe or "unknown"
@@ -129,6 +137,12 @@ class ConfigManager:
         if not self._apple_account_email:
             return None
         path = self.downloads_root / self.account_dir_name(self._apple_account_email)
+        legacy = self.downloads_root / self._legacy_account_dir_name(self._apple_account_email)
+        if legacy.exists() and not path.exists():
+            try:
+                legacy.rename(path)
+            except OSError:
+                path = legacy
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -266,8 +280,11 @@ class ConfigManager:
     @staticmethod
     def sort_banking_apps(apps: list[AppEntry]) -> list[AppEntry]:
         banking = list(apps)
-        banking.sort(key=lambda item: item.released or "", reverse=True)
+        # Newest first by release date, then title.
+        banking.sort(key=lambda item: ((item.released or ""), item.title.lower()), reverse=True)
+        # Stable secondary: among same released date, title A→Z.
         banking.sort(key=lambda item: item.title.lower())
+        banking.sort(key=lambda item: item.released or "", reverse=True)
         return banking
 
     @staticmethod
