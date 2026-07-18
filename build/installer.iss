@@ -13,6 +13,9 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\GROMOV\Restore+
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
+; Do not reuse a previous install dir (e.g. a one-off Temp verify path with the same AppId),
+; otherwise silent/auto updates keep writing to Temp instead of Program Files.
+UsePreviousAppDir=no
 OutputDir=..\dist
 OutputBaseFilename=GROMOV-RestorePlus-Setup
 SetupIconFile=..\assets\icon.ico
