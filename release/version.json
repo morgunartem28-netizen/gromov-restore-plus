@@ -9,5 +9,5 @@
     "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe"
   ],
   "sha256": "2b1f6fb9e6cd9a82a12b86efc52b215facb896578db43d780aa3c33ba5d04324",
-  "notes": "1.2.7: исправлен SHA256 манифеста (Setup на GitHub Releases был перезалит после первой записи version.json). Проверка обновления должна проходить."
+  "notes": "1.2.7: скачивание обновления через браузер; проверка версии в приложении; SHA256 манифеста приведён к актуальному Setup.exe; загрузка внутри приложения — опционально."
 }
