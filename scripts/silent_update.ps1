@@ -34,15 +34,17 @@ $Repo = "morgunartem28-netizen/gromov-restore-plus"
 $SetupName = "GROMOV-RestorePlus-Setup.exe"
 $RawManifest = "https://raw.githubusercontent.com/$Repo/main/release/version.json"
 
+# Prefer GitHub/proxy mirrors first. jsDelivr @main can stay stale for days
+# (observed serving 1.2.1 while main was 1.2.7) — keep it last as last resort.
 $ManifestCandidates = @(
     $ManifestUrl
-    "https://cdn.jsdelivr.net/gh/$Repo@main/release/version.json"
     "https://github.com/$Repo/raw/main/release/version.json"
     $RawManifest
     "https://gh-proxy.com/$RawManifest"
     "https://edgeone.gh-proxy.com/$RawManifest"
     "https://ghproxy.net/$RawManifest"
     "https://ghfast.top/$RawManifest"
+    "https://cdn.jsdelivr.net/gh/$Repo@main/release/version.json"
 ) | Where-Object { $_ -and $_.Trim() } | Select-Object -Unique
 
 function Write-Step([string]$Message) {
