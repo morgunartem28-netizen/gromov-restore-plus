@@ -91,21 +91,74 @@ def is_https_url(url: str) -> bool:
     return url.strip().lower().startswith("https://")
 
 
+# Public GitHub release proxies (verified HEAD 200 for Setup.exe assets).
+# Integrity is enforced by SHA256 — mirrors may only wrap a trusted inner URL.
+_GITHUB_PROXY_PREFIXES = (
+    "https://gh-proxy.com/",
+    "https://edgeone.gh-proxy.com/",
+    "https://ghproxy.net/",
+    "https://ghfast.top/",
+)
+
+_REPO_SLUG = "morgunartem28-netizen/gromov-restore-plus"
+
+
+def unwrap_github_proxy_url(url: str) -> str:
+    """If URL is ``https://proxy/https://github.com/...``, return the inner URL."""
+    text = (url or "").strip()
+    lower = text.lower()
+    for prefix in _GITHUB_PROXY_PREFIXES:
+        if lower.startswith(prefix):
+            inner = text[len(prefix) :]
+            if inner.lower().startswith("https://"):
+                return inner
+    return text
+
+
 def is_trusted_update_url(url: str) -> bool:
-    """Allow only HTTPS URLs on known GitHub release/raw hosts and CDN mirrors."""
-    lower = url.strip().lower()
+    """Allow only HTTPS URLs on known GitHub release/raw hosts and CDN mirrors.
+
+    Third-party GitHub proxies are allowed only when they wrap a trusted
+    ``github.com`` / ``raw.githubusercontent.com`` URL for this repository.
+    """
+    text = (url or "").strip()
+    lower = text.lower()
     if not lower.startswith("https://"):
         return False
+
     allowed_hosts = (
         "https://github.com/",
         "https://raw.githubusercontent.com/",
         "https://objects.githubusercontent.com/",
         "https://release-assets.githubusercontent.com/",
         # Contents API (uncached) for version.json when raw/CDN lag behind main
-        "https://api.github.com/repos/morgunartem28-netizen/gromov-restore-plus/contents/",
-        # jsDelivr mirrors for version.json when raw.githubusercontent.com is blocked
-        "https://cdn.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus",
-        "https://fastly.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus",
-        "https://gcore.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus",
+        f"https://api.github.com/repos/{_REPO_SLUG}/contents/",
+        # jsDelivr mirrors for version.json / static pages (not release .exe assets)
+        f"https://cdn.jsdelivr.net/gh/{_REPO_SLUG}",
+        f"https://fastly.jsdelivr.net/gh/{_REPO_SLUG}",
+        f"https://gcore.jsdelivr.net/gh/{_REPO_SLUG}",
     )
-    return any(lower.startswith(host) for host in allowed_hosts)
+    if any(lower.startswith(host) for host in allowed_hosts):
+        return True
+
+    inner = unwrap_github_proxy_url(text)
+    if inner == text:
+        return False
+    inner_lower = inner.lower()
+    # Proxies may only forward our GitHub HTTPS assets (releases / raw / objects).
+    trusted_inner_prefixes = (
+        f"https://github.com/{_REPO_SLUG}/",
+        f"https://raw.githubusercontent.com/{_REPO_SLUG}/",
+        "https://objects.githubusercontent.com/",
+        "https://release-assets.githubusercontent.com/",
+    )
+    return any(inner_lower.startswith(prefix) for prefix in trusted_inner_prefixes)
+
+
+def github_release_proxy_prefixes() -> tuple[str, ...]:
+    """Prefixes used to build Setup.exe download mirrors (after official GitHub)."""
+    return _GITHUB_PROXY_PREFIXES
+
+
+def repo_slug() -> str:
+    return _REPO_SLUG

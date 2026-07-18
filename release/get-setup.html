@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GROMOV Restore+ — скачать установщик</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --text: #e8eef6;
+      --muted: #9aa8b8;
+      --accent: #3d8bfd;
+      --ok: #3dd68c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #1c3a5f 0%, transparent 55%),
+                  radial-gradient(900px 500px at 90% 10%, #243018 0%, transparent 50%),
+                  var(--bg);
+      color: var(--text);
+      padding: 32px 20px 48px;
+    }
+    main {
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin: 0 0 8px;
+      letter-spacing: -0.02em;
+    }
+    .sub {
+      color: var(--muted);
+      line-height: 1.5;
+      margin: 0 0 28px;
+    }
+    .card {
+      background: color-mix(in srgb, var(--card) 92%, transparent);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 20px 22px;
+      margin-bottom: 16px;
+    }
+    .card h2 {
+      font-size: 1rem;
+      margin: 0 0 12px;
+      font-weight: 600;
+    }
+    a.btn {
+      display: block;
+      text-decoration: none;
+      color: var(--text);
+      background: rgba(61, 139, 253, 0.16);
+      border: 1px solid rgba(61, 139, 253, 0.45);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin: 8px 0;
+      font-weight: 600;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    a.btn:hover {
+      background: rgba(61, 139, 253, 0.28);
+      border-color: var(--accent);
+    }
+    a.btn.secondary {
+      background: rgba(255,255,255,0.04);
+      border-color: rgba(255,255,255,0.12);
+      font-weight: 500;
+      font-size: 0.95rem;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-top: 10px;
+      word-break: break-all;
+    }
+    .meta code {
+      color: var(--ok);
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.8rem;
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.55;
+    }
+    .hint strong { color: var(--text); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>GROMOV Restore+</h1>
+    <p class="sub">
+      Скачайте установщик. Если одна ссылка не открывается (блокировка GitHub у провайдера) —
+      попробуйте другую. Файл один и тот же; в приложении он дополнительно проверяется по SHA256.
+    </p>
+
+    <div class="card">
+      <h2>Прямые ссылки</h2>
+      <div id="links">
+        <a class="btn" id="latest" href="https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/latest">
+          Страница релизов на GitHub (latest)
+        </a>
+      </div>
+      <p class="meta" id="meta">Загрузка сведений о версии…</p>
+    </div>
+
+    <div class="card">
+      <h2>Если обновление в программе не работает</h2>
+      <p class="hint">
+        1. Откройте лог:
+        <strong>%LOCALAPPDATA%\GROMOV\RestorePlus\update_debug.log</strong><br />
+        2. Скачайте Setup по любой ссылке выше и установите поверх.<br />
+        3. Версии ≤1.2.1 умеют проверять обновления только через
+        <code>raw.githubusercontent.com</code> — если он заблокирован, нужен именно браузерный Setup один раз,
+        дальше помогут зеркала в новых сборках.
+      </p>
+    </div>
+  </main>
+  <script>
+    (function () {
+      var REPO = "morgunartem28-netizen/gromov-restore-plus";
+      var NAME = "GROMOV-RestorePlus-Setup.exe";
+      var proxies = [
+        "https://gh-proxy.com/",
+        "https://edgeone.gh-proxy.com/",
+        "https://ghproxy.net/",
+        "https://ghfast.top/"
+      ];
+      var manifests = [
+        "https://cdn.jsdelivr.net/gh/" + REPO + "@main/release/version.json",
+        "https://raw.githubusercontent.com/" + REPO + "/main/release/version.json"
+      ];
+
+      function el(tag, cls, text) {
+        var n = document.createElement(tag);
+        if (cls) n.className = cls;
+        if (text) n.textContent = text;
+        return n;
+      }
+
+      function addBtn(href, label, secondary) {
+        var a = el("a", secondary ? "btn secondary" : "btn", label);
+        a.href = href;
+        a.rel = "noopener noreferrer";
+        document.getElementById("links").appendChild(a);
+      }
+
+      function fill(version, setupUrl, sha) {
+        var meta = document.getElementById("meta");
+        meta.innerHTML = "Версия: <code>" + version + "</code>" +
+          (sha ? "<br/>SHA256: <code>" + sha + "</code>" : "");
+
+        var primary = setupUrl ||
+          ("https://github.com/" + REPO + "/releases/download/" + version + "/" + NAME);
+
+        addBtn(primary, "Скачать Setup " + version + " (GitHub)", false);
+        proxies.forEach(function (p, i) {
+          addBtn(p + primary, "Зеркало " + (i + 1) + " (если GitHub не открывается)", true);
+        });
+      }
+
+      function fail() {
+        document.getElementById("meta").textContent =
+          "Не удалось прочитать version.json — используйте страницу релизов выше.";
+        var fallback =
+          "https://github.com/" + REPO + "/releases/latest/download/" + NAME;
+        addBtn(fallback, "Скачать latest Setup (GitHub)", false);
+        proxies.forEach(function (p, i) {
+          addBtn(p + fallback, "Зеркало " + (i + 1), true);
+        });
+      }
+
+      function tryManifest(i) {
+        if (i >= manifests.length) {
+          fail();
+          return;
+        }
+        fetch(manifests[i] + "?t=" + Date.now(), { cache: "no-store" })
+          .then(function (r) { if (!r.ok) throw new Error("http"); return r.json(); })
+          .then(function (j) {
+            fill(String(j.version || ""), String(j.setup_url || ""), String(j.sha256 || ""));
+          })
+          .catch(function () { tryManifest(i + 1); });
+      }
+
+      tryManifest(0);
+    })();
+  </script>
+</body>
+</html>

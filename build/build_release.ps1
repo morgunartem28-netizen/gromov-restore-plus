@@ -197,11 +197,19 @@ if ($iscc) {
         } else {
             $appVersion = "0.0.0"
         }
+        $setupUrl = "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/$appVersion/GROMOV-RestorePlus-Setup.exe"
         $manifest = [ordered]@{
-            version   = $appVersion
-            setup_url = "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/$appVersion/GROMOV-RestorePlus-Setup.exe"
-            sha256    = $sha
-            notes     = "Сборка $appVersion. SHA256 установщика записан автоматически."
+            version    = $appVersion
+            setup_url  = $setupUrl
+            setup_urls = @(
+                $setupUrl
+                "https://gh-proxy.com/$setupUrl"
+                "https://edgeone.gh-proxy.com/$setupUrl"
+                "https://ghproxy.net/$setupUrl"
+                "https://ghfast.top/$setupUrl"
+            )
+            sha256     = $sha
+            notes      = "1.2.7+: загрузка Setup с нескольких зеркал (GitHub + прокси), прокси WinHTTP/PAC, страница зеркал в браузере. SHA256 установщика записан автоматически."
         }
         $manifestPath = Join-Path $root "release\version.json"
         $json = ($manifest | ConvertTo-Json -Depth 5)

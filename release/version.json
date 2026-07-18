@@ -1,6 +1,13 @@
 {
-  "version": "1.2.6",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.6/GROMOV-RestorePlus-Setup.exe",
-  "sha256": "c8d24ccbcc6445fd6023648ce16d761653e7b9eccf9f679d9589c477f3555acf",
-  "notes": "1.2.6: для старых 1.1.x/≤1.2.1 — автообновление если доступен GitHub raw (иначе один раз Setup из браузера); внутри — зеркала, TLS с системными сертификатами, «скачать в браузере», лог update_debug.log; тёмная тема, фон каталога."
+  "version": "1.2.7",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
+  "setup_urls": [
+    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
+    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
+    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
+    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
+    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe"
+  ],
+  "sha256": "c0393a3ca4455abf78bf784b8baea8fc593216ae5dee89614bae6c9aed1ddd29",
+  "notes": "1.2.7: снова скачивание обновления через браузер (как раньше, стабильнее на разных ПК); проверка версии в приложении; загрузка внутри приложения — опционально."
 }

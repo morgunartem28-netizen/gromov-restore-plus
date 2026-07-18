@@ -1018,8 +1018,8 @@ class RestoreIosApp(ctk.CTk):
     ) -> None:
         dialog = ctk.CTkToplevel(self)
         dialog.title(title)
-        dialog.geometry("520x360")
-        dialog.minsize(480, 320)
+        dialog.geometry("540x400")
+        dialog.minsize(500, 360)
         dialog.resizable(False, False)
         dialog.transient(self)
         dialog.grab_set()
@@ -1143,6 +1143,7 @@ class RestoreIosApp(ctk.CTk):
                     expected_sha256=result.sha256,
                     version=result.latest_version,
                     on_progress=on_progress,
+                    setup_urls=result.setup_urls,
                 )
             except UpdateCheckError as exc:
                 message = str(exc)
@@ -1160,14 +1161,14 @@ class RestoreIosApp(ctk.CTk):
                         title="Не удалось скачать обновление",
                         message=(
                             f"{m}\n\n"
-                            "Встроенная загрузка иногда недоступна (блокировка GitHub/CDN, "
-                            "антивирус, прокси), даже если браузер открывает ту же ссылку.\n"
-                            "Повторите попытку или скачайте в браузере."
+                            "Рекомендуем скачать в браузере — там обычно доступны "
+                            "другие зеркала (GitHub + прокси), даже когда встроенная "
+                            "загрузка не проходит."
                         ),
-                        primary_text="Повторить",
-                        on_primary=lambda: self._download_update(result),
-                        secondary_text="Открыть страницу загрузки в браузере",
-                        on_secondary=lambda: self._open_update_in_browser(result.setup_url),
+                        primary_text="Скачать в браузере",
+                        on_primary=lambda: self._open_update_in_browser(result.setup_url),
+                        secondary_text="Повторить в приложении",
+                        on_secondary=lambda: self._download_update(result),
                         tertiary_text="Закрыть",
                     ),
                 )
@@ -1202,37 +1203,53 @@ class RestoreIosApp(ctk.CTk):
     def _present_update_available(self, result: UpdateCheckResult) -> None:
         if result.setup_url:
             self._last_setup_url = result.setup_url
+        # Browser-first: same path that worked on other PCs (system TLS/proxy).
+        self._open_update_in_browser(result.setup_url)
+        self._toast(
+            "Скачивание обновления открыто в браузере — установите Setup",
+            kind="info",
+        )
         notes = f"\n\n{result.notes}" if result.notes else ""
         message = (
             f"Доступна новая версия {result.latest_version}.\n"
             f"Текущая версия: {result.current_version}.{notes}\n\n"
-            "Рекомендуем скачать в приложении — файл проверяется по SHA256."
+            "Скачивание открыто в браузере (страница с зеркалами) — установите Setup.\n"
+            "Так надёжнее на разных ПК (антивирус, прокси, блокировка GitHub).\n"
+            "В приложении тоже можно скачать (несколько зеркал + проверка SHA256)."
         )
         self._show_update_action_dialog(
             title="Доступно обновление",
             message=message,
-            primary_text="Скачать в приложении",
-            on_primary=lambda: self._download_update(result),
-            secondary_text="Позже",
-            on_secondary=None,
-            tertiary_text="",
+            primary_text="Открыть снова в браузере",
+            on_primary=lambda: self._open_update_in_browser(result.setup_url),
+            secondary_text="Скачать в приложении",
+            on_secondary=lambda: self._download_update(result),
+            tertiary_text="Позже",
             browser_url=result.setup_url,
-            link_text="Скачать в браузере",
-            on_link=lambda: self._open_update_in_browser(result.setup_url),
         )
 
     def _present_update_check_failure(self, message: str) -> None:
+        # Auto-open mirror chooser (jsDelivr) so user is not stuck when GitHub is blocked.
+        page = resolve_browser_download_url(self._last_setup_url)
+        self._log(f"Открыта страница загрузки в браузере:\n{page}")
+        webbrowser.open(page)
+        self._toast(
+            "Страница загрузки открыта в браузере",
+            kind="warning",
+        )
         self._show_update_action_dialog(
             title="Не удалось проверить обновления",
             message=(
                 f"{message}\n\n"
-                "Проверка из приложения может не пройти, даже если сайт GitHub "
-                "открывается в браузере (другой путь сети, TLS, блокировка CDN)."
+                "Проверка из приложения может не пройти, даже если интернет работает "
+                "(блокировка raw.githubusercontent.com / GitHub, TLS антивируса, прокси).\n\n"
+                "Страница со ссылками и зеркалами уже открыта в браузере — "
+                "скачайте Setup оттуда и установите поверх."
             ),
-            primary_text="Повторить",
-            on_primary=self._check_updates,
-            secondary_text="Открыть страницу загрузки в браузере",
-            on_secondary=lambda: self._open_update_in_browser(self._last_setup_url),
+            primary_text="Открыть снова в браузере",
+            on_primary=lambda: self._open_update_in_browser(self._last_setup_url),
+            secondary_text="Повторить проверку",
+            on_secondary=self._check_updates,
             tertiary_text="Закрыть",
         )
 
@@ -1251,7 +1268,6 @@ class RestoreIosApp(ctk.CTk):
                         f"Диагностика обновления (файл): {p}"
                     ),
                 )
-                self.after(0, lambda: self._toast("Не удалось проверить обновления", kind="warning"))
                 self.after(0, lambda m=message: self._present_update_check_failure(m))
                 return
             except Exception as exc:  # noqa: BLE001 — surface unexpected transport bugs
