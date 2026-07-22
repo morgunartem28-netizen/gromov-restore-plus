@@ -36,11 +36,26 @@ _RAW_MANIFEST = (
 )
 
 GITHUB_RELEASES_LATEST = f"https://github.com/{_REPO_SLUG}/releases/latest"
-# Static mirror chooser (jsDelivr /gh — works when github.com is blocked in browser).
-# Not a Setup.exe host: jsDelivr does not serve GitHub Releases binaries.
+# Direct Setup asset via GitHub's "latest" redirect (not an HTML landing page).
+GITHUB_SETUP_LATEST = (
+    f"https://github.com/{_REPO_SLUG}/releases/latest/download/{_SETUP_FILENAME}"
+)
+# Marketing / manual mirror chooser only — never use for in-app "open in browser".
 BROWSER_SETUP_PAGE = (
     f"https://cdn.jsdelivr.net/gh/{_REPO_SLUG}@main/release/get-setup.html"
 )
+
+
+def _is_html_landing_url(url: str) -> bool:
+    """True for get-setup.html / other pages — not a binary download URL."""
+    lower = (url or "").strip().lower()
+    if not lower:
+        return False
+    path = urllib.parse.urlparse(lower).path
+    return path.endswith(".html") or path.endswith("/get-setup.html") or path.endswith(
+        "get-setup.html"
+    )
+
 
 # Fallback mirrors when raw.githubusercontent.com is blocked (common in RU)
 # or returns a stale cached copy of version.json.
@@ -57,16 +72,16 @@ _BUILTIN_MANIFEST_FALLBACKS = (
 
 
 def resolve_browser_download_url(setup_url: str | None = None) -> str:
-    """Open the multi-mirror chooser page; fall back to direct Setup / Releases.
+    """Return a direct Setup.exe URL for the in-app «открыть в браузере» path.
 
-    In-app urllib often fails on RU ISP / AV MITM while the browser still works.
-    The chooser page is on jsDelivr and lists GitHub + release proxies.
+    Prefer the manifest ``setup_url`` (GitHub release asset or trusted proxy).
+    Never open ``get-setup.html`` here — that page is only for manual visits.
     """
-    if is_trusted_update_url(BROWSER_SETUP_PAGE):
-        return BROWSER_SETUP_PAGE
     url = (setup_url or "").strip()
-    if url and is_trusted_update_url(url):
+    if url and is_trusted_update_url(url) and not _is_html_landing_url(url):
         return url
+    if is_trusted_update_url(GITHUB_SETUP_LATEST):
+        return GITHUB_SETUP_LATEST
     return GITHUB_RELEASES_LATEST
 
 
@@ -1131,13 +1146,16 @@ def download_verified_installer(
             continue
 
     summary = "; ".join(errors[:4]) if errors else "нет деталей"
-    browser_hint = BROWSER_SETUP_PAGE
+    browser_hint = next(
+        (u for u in candidates if u and not _is_html_landing_url(u)),
+        GITHUB_SETUP_LATEST,
+    )
     message = (
         "Не удалось скачать установщик ни с одного зеркала.\n"
         f"Детали: {summary}\n\n"
         "Встроенная загрузка часто падает при блокировке GitHub/CDN, "
         "антивирусе или прокси — даже если браузер открывает ту же ссылку.\n"
-        f"Скачайте в браузере (несколько зеркал):\n{browser_hint}"
+        f"Скачайте Setup.exe в браузере:\n{browser_hint}"
     )
     if last_exc is not None:
         raise UpdateCheckError(message) from last_exc

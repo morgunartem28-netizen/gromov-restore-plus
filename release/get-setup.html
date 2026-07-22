@@ -152,10 +152,25 @@
         document.getElementById("links").appendChild(a);
       }
 
+      function startSetupDownload(href) {
+        // Older app builds open this page for "update via browser" — kick off
+        // the Setup.exe download immediately so users do not stop on HTML.
+        try {
+          var a = document.createElement("a");
+          a.href = href;
+          a.rel = "noopener noreferrer";
+          a.style.display = "none";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        } catch (e) {}
+      }
+
       function fill(version, setupUrl, sha) {
         var meta = document.getElementById("meta");
         meta.innerHTML = "Версия: <code>" + version + "</code>" +
-          (sha ? "<br/>SHA256: <code>" + sha + "</code>" : "");
+          (sha ? "<br/>SHA256: <code>" + sha + "</code>" : "") +
+          "<br/>Загрузка Setup.exe запущена — если не началась, нажмите ссылку ниже.";
 
         var primary = setupUrl ||
           ("https://github.com/" + REPO + "/releases/download/" + version + "/" + NAME);
@@ -164,6 +179,7 @@
         proxies.forEach(function (p, i) {
           addBtn(p + primary, "Зеркало " + (i + 1) + " (если GitHub не открывается)", true);
         });
+        startSetupDownload(primary);
       }
 
       function fail() {
@@ -175,6 +191,7 @@
         proxies.forEach(function (p, i) {
           addBtn(p + fallback, "Зеркало " + (i + 1), true);
         });
+        startSetupDownload(fallback);
       }
 
       function tryManifest(i) {

@@ -1064,7 +1064,7 @@ class RestoreIosApp(ctk.CTk):
 
     def _open_update_in_browser(self, setup_url: str | None = None) -> None:
         url = resolve_browser_download_url(setup_url or self._last_setup_url)
-        self._log(f"Открыта страница загрузки в браузере:\n{url}")
+        self._log(f"Открыта загрузка Setup в браузере:\n{url}")
         webbrowser.open(url)
 
     def _show_update_action_dialog(
