@@ -247,6 +247,17 @@
       "maskTitle": "Кофе в Кармане",
       "description": "МТС Банк",
       "iconFile": "mts-kofe-v-karmane.png"
+    },
+    {
+      "id": "rshb-agroskan",
+      "title": "Россельхозбанк",
+      "bankGroup": "rshb",
+      "bundleId": "",
+      "appId": 6756363114,
+      "maskTitle": "АгроСкан",
+      "released": "2026-02-06",
+      "description": "Россельхозбанк",
+      "iconFile": "rshb-agroskan.png"
     }
   ]
 }

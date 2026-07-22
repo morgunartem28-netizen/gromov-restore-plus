@@ -30,6 +30,7 @@ BANK_GROUPS: tuple[BankGroup, ...] = (
     BankGroup("psb", "ПСБ", "#E35205", "П"),
     BankGroup("vtb", "ВТБ", "#002882", "В"),
     BankGroup("mts", "МТС Банк", "#E30611", "M"),
+    BankGroup("rshb", "Россельхозбанк", "#006B3F", "Р"),
 )
 
 
