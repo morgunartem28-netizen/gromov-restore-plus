@@ -26,6 +26,7 @@ class InstallJob:
     status: JobStatus = JobStatus.PENDING
     error: str = ""
     id: str = field(default="")
+    udid: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -71,7 +72,7 @@ class InstallQueue:
     def is_busy(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
-    def enqueue(self, apps: list) -> int:
+    def enqueue(self, apps: list, *, udid: str | None = None) -> int:
         added = 0
         with self._lock:
             existing = {
@@ -82,7 +83,7 @@ class InstallQueue:
             for app in apps:
                 if app.id in existing:
                     continue
-                self._jobs.append(InstallJob(app=app))
+                self._jobs.append(InstallJob(app=app, udid=udid))
                 existing.add(app.id)
                 added += 1
         self._notify()

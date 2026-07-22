@@ -209,7 +209,7 @@ if ($iscc) {
                 "https://ghfast.top/$setupUrl"
             )
             sha256     = $sha
-            notes      = "1.2.7: усилено автоскачивание Setup (несколько зеркал), WinHTTP/PAC-прокси, лог update_debug.log. Для ПК на 1.1.x/<=1.2.1 при блоке GitHub raw нужен один silent deploy (scripts/silent_update.ps1 или Setup) — дальше обновления автоматом."
+            notes      = "Вышло новое обновление! 🎉 Большие баги победили, средние напугали, а маленькие пока успешно скрываются."
         }
         $manifestPath = Join-Path $root "release\version.json"
         $json = ($manifest | ConvertTo-Json -Depth 5)

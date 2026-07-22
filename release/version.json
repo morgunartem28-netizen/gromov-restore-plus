@@ -1,13 +1,13 @@
 {
-  "version": "1.2.7",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
+  "version": "1.2.8",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.8/GROMOV-RestorePlus-Setup.exe",
   "setup_urls": [
-    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
-    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
-    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
-    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe",
-    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.7/GROMOV-RestorePlus-Setup.exe"
+    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.8/GROMOV-RestorePlus-Setup.exe",
+    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.8/GROMOV-RestorePlus-Setup.exe",
+    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.8/GROMOV-RestorePlus-Setup.exe",
+    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.8/GROMOV-RestorePlus-Setup.exe",
+    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.8/GROMOV-RestorePlus-Setup.exe"
   ],
-  "sha256": "2b1f6fb9e6cd9a82a12b86efc52b215facb896578db43d780aa3c33ba5d04324",
-  "notes": "1.2.7: скачивание обновления через браузер; проверка версии в приложении; SHA256 манифеста приведён к актуальному Setup.exe; загрузка внутри приложения — опционально."
+  "sha256": "f57905eda025108cdb76d66dfdc63359212ed6ed226719096b13ae1f8572dfaf",
+  "notes": "Вышло новое обновление! 🎉\nБольшие баги победили, средние напугали, а маленькие пока успешно скрываются."
 }

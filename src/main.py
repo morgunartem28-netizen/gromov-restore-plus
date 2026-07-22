@@ -17,6 +17,7 @@ from app_paths import data_dir, ensure_app_dirs, install_dir, resource_dir
 from app_settings import AppSettings
 from config_manager import BANKS_FOLDER_TITLE, BANK_GROUPS, AppEntry, BankGroup, ConfigManager
 from device_installer import DeviceInfo, DeviceInstaller, DeviceInstallerError
+from device_picker import pick_usb_device
 from disk_utils import DiskSpaceError, ensure_download_space
 from driver_installer import DriverInstallerError, apple_drivers_installed, install_apple_drivers
 from icon_loader import IconLoader
@@ -137,6 +138,7 @@ class RestoreIosApp(ctk.CTk):
         self.after(300, self._warm_icon_cache)
         self.after(400, self._purge_stale_caches)
         self.after(800, self._first_run_driver_nudge)
+        self.after(5000, self._poll_usb_devices)
 
     def _set_window_icon(self) -> None:
         icon_path = resource_dir() / "assets" / "icon.ico"
@@ -599,17 +601,20 @@ class RestoreIosApp(ctk.CTk):
             raise IpatoolError("ipatool не найден")
         if not self._resolve_apple_account_email():
             raise IpatoolError("Сначала войдите в Apple ID.")
-        udid = self._selected_udid
+        # Prefer UDID frozen at enqueue time — never retarget mid-queue.
+        udid = (job.udid or self._selected_udid or "").strip() or None
         if not udid:
-            devices = self.device_installer.list_device_infos()
+            devices = self.device_installer.list_usb_devices()
             if len(devices) == 1:
                 udid = devices[0].udid
             elif len(devices) > 1:
                 raise DeviceInstallerError(
-                    "Подключено несколько iPhone.\nВыберите устройство в боковой панели."
+                    "Подключено несколько iPhone по USB.\nВыберите устройство перед установкой."
                 )
-            elif not devices:
-                raise DeviceInstallerError("iPhone не найден.")
+            else:
+                raise DeviceInstallerError(
+                    "iPhone по USB не найден.\nПодключите кабель и нажмите «Доверять»."
+                )
 
         def on_phase(phase: str, value: float, text: str) -> None:
             progress(phase, value, text)
@@ -640,10 +645,14 @@ class RestoreIosApp(ctk.CTk):
             title = job.app.maskTitle or job.app.title
             if job.status == JobStatus.DONE and prev == JobStatus.RUNNING.value:
                 self._log(f"Установлено: {title}")
-                self._toast(f"Установлено: {title}", kind="success")
+                target_udid = job.udid or self._selected_udid
+                target = next((d for d in self._devices if d.udid == target_udid), None)
+                target_name = (target.name if target else None) or "iPhone"
+                self._toast(f"Установлено на {target_name}: {title}", kind="success")
                 messagebox.showinfo(
                     "Готово",
-                    f"Приложение «{title}» установлено.\nПроверьте домашний экран iPhone.",
+                    f"Приложение «{title}» установлено на {target_name} (USB).\n"
+                    "Проверьте домашний экран iPhone.",
                 )
             elif job.status == JobStatus.FAILED and prev == JobStatus.RUNNING.value:
                 self._last_failed_app = job.app
@@ -653,39 +662,91 @@ class RestoreIosApp(ctk.CTk):
 
     def _remember_devices(self, devices: list[DeviceInfo]) -> None:
         self._devices = devices
-        if len(devices) == 1:
-            self._selected_udid = devices[0].udid
-            self.settings.selected_udid = devices[0].udid
+        busy = self._install_queue.is_busy
+        if self._selected_udid and not any(d.udid == self._selected_udid for d in devices):
+            # Previously chosen phone was unplugged — never silently switch to another.
+            self._selected_udid = None
+            self.settings.selected_udid = None
         elif not devices:
             self._selected_udid = None
+            self.settings.selected_udid = None
+        elif len(devices) == 1 and not busy:
+            # Auto-bind only when idle; mid-queue target stays on job.udid.
+            self._selected_udid = devices[0].udid
+            self.settings.selected_udid = devices[0].udid
+
+    def _poll_usb_devices(self) -> None:
+        """Refresh USB readiness periodically so plug/unplug is reflected without restart."""
+
+        def task() -> None:
+            try:
+                devices = self.device_installer.list_usb_devices()
+            except Exception:
+                devices = []
+
+            def apply() -> None:
+                prev = {d.udid for d in self._devices}
+                now = {d.udid for d in devices}
+                self._remember_devices(devices)
+                if prev != now and not self._install_queue.is_busy:
+                    self._refresh_readiness()
+                # Reschedule on UI thread only (tkinter is not thread-safe).
+                self.after(8000, self._poll_usb_devices)
+
+            self.after(0, apply)
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _usb_not_connected_message(self) -> str:
+        return (
+            "Подключите iPhone к компьютеру через USB-кабель\n\n"
+            "1. Подключите iPhone к ПК через USB.\n"
+            "2. Разблокируйте iPhone.\n"
+            "3. Нажмите «Доверять этому компьютеру», если появится запрос.\n"
+            "4. После обнаружения устройства можно начинать установку.\n\n"
+            "Устройства в той же Wi‑Fi сети не используются — только кабель."
+        )
 
     def _confirm_device_for_install(self) -> str | None:
         try:
-            devices = self.device_installer.list_device_infos()
+            devices = self.device_installer.list_usb_devices()
             self._remember_devices(devices)
         except DeviceInstallerError as exc:
             title, message = friendly_error(exc, domain="iPhone")
             messagebox.showerror(title, message)
             return None
         if not devices:
-            messagebox.showerror("iPhone", "iPhone не найден.\nПодключите кабель и нажмите «Доверять».")
+            messagebox.showwarning("iPhone", self._usb_not_connected_message())
+            driver_line = (
+                "Драйверы Apple: установлены" if apple_drivers_installed() else "Драйверы Apple: не установлены"
+            )
+            self.readiness_label.configure(text=f"{driver_line}\niPhone по USB: не найден")
             return None
         if len(devices) == 1:
             device = devices[0]
+            self._toast(f"Установка на {device.name or 'iPhone'} (USB)", kind="info")
         else:
-            # Несколько устройств — короткое подтверждение по списку имён.
-            lines = "\n".join(f"• {d.name} ({d.model or 'iPhone'})" for d in devices)
-            if not messagebox.askyesno(
-                "Несколько iPhone",
-                "Подключено несколько устройств:\n\n"
-                f"{lines}\n\n"
-                "Установить на первое в списке?\n"
-                f"({devices[0].name})",
-            ):
+            device = pick_usb_device(self, devices)
+            if device is None:
                 return None
-            device = devices[0]
+            # Re-validate after picker (user might unplug while choosing).
+            try:
+                live = self.device_installer.list_usb_devices()
+            except DeviceInstallerError as exc:
+                title, message = friendly_error(exc, domain="iPhone")
+                messagebox.showerror(title, message)
+                return None
+            if not any(d.udid == device.udid for d in live):
+                messagebox.showwarning(
+                    "iPhone",
+                    "Выбранный iPhone отключён.\nПодключите его по USB и повторите.",
+                )
+                return None
+            devices = live
         self._selected_udid = device.udid
         self.settings.selected_udid = device.udid
+        self._remember_devices(devices)
+        self._refresh_readiness()
         return device.udid
 
     def _enqueue_apps(self, apps: list[AppEntry]) -> None:
@@ -702,7 +763,7 @@ class RestoreIosApp(ctk.CTk):
         self.after(0, self._reset_progress)
         self.after(0, self._reset_phases)
         self.after(0, lambda: self._set_progress("В очереди...", 0.02))
-        added = self._install_queue.enqueue(apps)
+        added = self._install_queue.enqueue(apps, udid=udid)
         if added == 0:
             messagebox.showinfo("Очередь", "Эти приложения уже в очереди.")
         else:
@@ -743,7 +804,7 @@ class RestoreIosApp(ctk.CTk):
         try:
             if apple_drivers_installed():
                 return
-            devices = self.device_installer.list_device_infos()
+            devices = self.device_installer.list_usb_devices()
             if devices:
                 return
         except Exception:
@@ -810,16 +871,19 @@ class RestoreIosApp(ctk.CTk):
             else "Драйверы Apple: не установлены"
         )
         try:
-            devices = self.device_installer.list_devices()
-            if devices:
-                device_name = devices[0]
+            devices = self.device_installer.list_usb_devices()
+            if len(devices) == 1:
+                device = devices[0]
+                device_name = device.label
                 if len(device_name) > 42:
                     device_name = device_name[:39] + "..."
-                device_line = f"iPhone: {device_name}"
+                device_line = f"USB: {device_name}"
+            elif len(devices) > 1:
+                device_line = f"USB: подключено {len(devices)} iPhone — выберите при установке"
             else:
-                device_line = "iPhone: не найден"
+                device_line = "USB: iPhone не найден"
         except DeviceInstallerError:
-            device_line = "iPhone: не найден"
+            device_line = "USB: iPhone не найден"
         return driver_line, device_line, f"{driver_line}\n{device_line}"
 
     def _refresh_readiness(self, *, log: bool = False) -> None:
@@ -860,7 +924,7 @@ class RestoreIosApp(ctk.CTk):
             self.after(0, lambda: self._log(device_line))
 
             try:
-                devices = self.device_installer.list_device_infos()
+                devices = self.device_installer.list_usb_devices()
                 self.after(0, lambda d=devices: self._remember_devices(d))
             except Exception:
                 pass
@@ -1903,11 +1967,11 @@ class RestoreIosApp(ctk.CTk):
         secondary_button(buttons, text="Закрыть", command=dialog.destroy, width=100).pack(side="right", padx=(0, 8))
 
     def _check_device(self) -> None:
-        self.readiness_label.configure(text="Проверка iPhone...")
+        self.readiness_label.configure(text="Проверка USB...")
 
         def task() -> None:
             try:
-                devices = self.device_installer.list_device_infos()
+                devices = self.device_installer.list_usb_devices()
 
                 def done() -> None:
                     self._remember_devices(devices)
@@ -1916,26 +1980,27 @@ class RestoreIosApp(ctk.CTk):
                         "Драйверы Apple: установлены" if driver_ok else "Драйверы Apple: не установлены"
                     )
                     if devices:
-                        device_line = f"iPhone: {devices[0].label}"
-                        if len(devices) > 1:
-                            device_line += f" (+{len(devices) - 1})"
+                        if len(devices) == 1:
+                            device_line = f"USB: {devices[0].label}"
+                            body = (
+                                "Подключён по USB и готов к установке:\n\n"
+                                + devices[0].detail_lines
+                            )
+                        else:
+                            device_line = f"USB: подключено {len(devices)} iPhone"
+                            body = (
+                                "Подключено несколько iPhone по USB.\n"
+                                "При установке нужно будет выбрать устройство.\n\n"
+                                + "\n\n".join(d.detail_lines for d in devices)
+                            )
                         self.readiness_label.configure(text=f"{driver_line}\n{device_line}")
-                        lines = "\n".join(f"• {d.label}" for d in devices)
-                        self._log("Найденные устройства:\n" + lines)
-                        messagebox.showinfo(
-                            "iPhone",
-                            "Найдено:\n\n" + "\n\n".join(d.detail_lines for d in devices),
-                        )
+                        lines = "\n".join(f"• {d.label} (USB)" for d in devices)
+                        self._log("USB-устройства:\n" + lines)
+                        messagebox.showinfo("iPhone (USB)", body)
                     else:
-                        self.readiness_label.configure(text=f"{driver_line}\niPhone: не найден")
-                        self._log("iPhone не найден. Подключите USB и нажмите «Доверять».")
-                        messagebox.showwarning(
-                            "iPhone",
-                            "iPhone не найден.\n\n"
-                            "1. Подключите кабель USB\n"
-                            "2. На iPhone нажмите «Доверять»\n"
-                            "3. При необходимости установите драйверы Apple",
-                        )
+                        self.readiness_label.configure(text=f"{driver_line}\nUSB: iPhone не найден")
+                        self._log("iPhone по USB не найден.")
+                        messagebox.showwarning("iPhone", self._usb_not_connected_message())
 
                 self.after(0, done)
             except DeviceInstallerError as exc:
