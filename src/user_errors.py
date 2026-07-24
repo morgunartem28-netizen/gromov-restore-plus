@@ -35,8 +35,14 @@ def friendly_error(exc: BaseException | str, *, domain: str = "Общая") -> t
         return title, text
 
     if domain == "Apple ID" or "apple" in lower or "auth" in lower or "login" in lower:
-        if "2fa" in lower or "auth code" in lower or "verification" in lower:
-            return "Apple ID", "Нужен код подтверждения с iPhone или Mac."
+        if "2fa code is required" in lower or "auth code is required" in lower:
+            return "Apple ID", "Нужен код подтверждения с доверенного iPhone/Mac (уведомление, не email)."
+        if "hex digit" in lower or "unmarshal xml" in lower:
+            return (
+                "Apple ID",
+                "Apple отклонил вход до отправки кода 2FA.\n"
+                "Подождите несколько минут и повторите попытку.",
+            )
         if "password" in lower or "badlogin" in lower or "incorrect" in lower:
             return "Apple ID", "Неверный email или пароль Apple ID."
         if "disabled" in lower:
@@ -45,6 +51,9 @@ def friendly_error(exc: BaseException | str, *, domain: str = "Общая") -> t
             return "Apple ID", "Apple временно ограничил вход. Подождите несколько минут."
         if "network" in lower or "connection" in lower or "timed out" in lower:
             return "Сеть", "Нет связи с Apple. Проверьте интернет и повторите."
+        # Keep already-crafted multi-line Russian guidance from ipatool_client.
+        if "\n" in text and ("apple" in lower or "код" in lower or "вход" in lower):
+            return "Apple ID", text
         return "Apple ID", "Не удалось войти в Apple ID.\nПроверьте данные и попробуйте снова."
 
     if "disk" in lower or "места" in lower or "space" in lower:

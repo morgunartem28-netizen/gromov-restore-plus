@@ -247,7 +247,16 @@ class IpatoolClient:
             # Still treat local wipe as success for the user.
             pass
 
+    _TWO_FACTOR_HINT = (
+        "Apple запросил код подтверждения.\n"
+        "Код обычно приходит как уведомление на доверенный iPhone/iPad/Mac "
+        "(не всегда SMS).\n"
+        "Введите 6 цифр ниже и снова нажмите «Войти» — код действует около 30 секунд."
+    )
+
     def auth_login(self, email: str, password: str, auth_code: str | None = None) -> dict:
+        # Cancel from a previous install must not block a new login.
+        self.clear_cancel()
         code = (auth_code or "").replace(" ", "").strip()
         args = ["auth", "login", "--email", email]
         secret_env = {"IPATOOL_PASSWORD": password}
@@ -257,30 +266,38 @@ class IpatoolClient:
         completed = self._run(args, secret_env=secret_env)
         combined = f"{completed.stdout or ''}\n{completed.stderr or ''}".strip()
 
+        # ipatool non-interactive: ErrAuthCodeRequired → exit 0 + info message
+        # ("2FA code is required…"). That means Apple already triggered the code.
+        if self.needs_two_factor(combined) and not code:
+            raise IpatoolTwoFactorRequired(self._TWO_FACTOR_HINT)
+
         if completed.returncode == 0:
-            if self.needs_two_factor(combined) and not code:
-                raise IpatoolTwoFactorRequired(
-                    "Код подтверждения отправлен на iPhone или Mac. Введите 6 цифр и нажмите «Войти» снова."
-                )
-            self.harden_session_store()
             if completed.stdout and completed.stdout.strip():
                 try:
                     payload = json.loads(completed.stdout)
                     if payload.get("success") is True or payload.get("email"):
+                        self.harden_session_store()
                         return payload
+                    # Ambiguous JSON (e.g. info-only) — verify via auth info.
                 except json.JSONDecodeError:
                     pass
-            return self.auth_info()
+            self.harden_session_store()
+            try:
+                return self.auth_info()
+            except IpatoolError as exc:
+                raise IpatoolError(
+                    "Вход не завершён: сессия Apple ID не сохранилась.\n"
+                    "Проверьте email/пароль и повторите. Если нужен код 2FA — "
+                    "дождитесь уведомления на доверенном устройстве."
+                ) from exc
 
         error_text = self._extract_error(completed)
         if self.needs_two_factor(error_text) and not code:
-            raise IpatoolTwoFactorRequired(
-                "Код подтверждения отправлен на iPhone или Mac. Введите 6 цифр и нажмите «Войти» снова."
-            )
-        raise IpatoolError(self.format_error(error_text))
+            raise IpatoolTwoFactorRequired(self._TWO_FACTOR_HINT)
+        raise IpatoolError(self.format_error(error_text, had_auth_code=bool(code)))
 
     @staticmethod
-    def format_error(error_text: str) -> str:
+    def format_error(error_text: str, *, had_auth_code: bool = False) -> str:
         text = error_text.strip()
         if not text:
             return "Неизвестная ошибка авторизации."
@@ -293,14 +310,24 @@ class IpatoolClient:
             )
         if "unexpected hex digit" in lower or "failed to unmarshal xml" in lower:
             return (
-                "Apple вернул некорректный ответ при входе.\n"
-                "Перезапустите приложение и попробуйте снова через 1–2 минуты."
+                "Apple вернул HTML/ошибку вместо ответа авторизации — "
+                "код 2FA при этом не отправляется.\n"
+                "Подождите 2–5 минут и попробуйте снова.\n"
+                "Если ошибка повторяется: проверьте интернет, VPN/прокси, "
+                "и не делайте много попыток подряд (лимит Apple)."
             )
         if "something went wrong" in lower and "auth code" not in lower:
+            if had_auth_code:
+                return (
+                    "Apple не принял код подтверждения.\n"
+                    "Запросите новый код (снова «Войти» без кода) и введите его сразу "
+                    "(код живёт ~30 сек).\n"
+                    "Проверьте также пароль Apple ID."
+                )
             return (
-                "Apple не принял вход.\n"
-                "Если вводили код 2FA — запросите новый код и введите его сразу (код живёт ~30 сек).\n"
-                "Проверьте также email и пароль."
+                "Apple отклонил вход до запроса кода 2FA.\n"
+                "Проверьте email и пароль. Если данные верны — подождите несколько минут "
+                "и повторите (часто это временный отказ Apple / лимит попыток)."
             )
         if "account is disabled" in lower:
             return "Неверный email или пароль Apple ID."
@@ -331,28 +358,36 @@ class IpatoolClient:
                 "Авито весит ~800 МБ — не закрывайте программу 5–10 минут."
             )
         if "badlogin" in lower or "incorrect" in lower:
-            return "Неверный пароль или код подтверждения."
+            return (
+                "Неверный пароль или код подтверждения.\n"
+                "Код 2FA при неверном пароле не приходит — сначала проверьте пароль."
+            )
         return text
 
     @staticmethod
     def needs_two_factor(error_text: str) -> bool:
+        """True only when Apple/ipatool actually asked for a 2FA code.
+
+        Do NOT treat generic BadLogin / incorrect password as 2FA — that falsely
+        tells the user a code was sent when Apple never triggered one.
+        ipatool maps the real 2FA case to «auth code is required» / «2FA code is required».
+        """
         text = error_text.lower()
         markers = (
-            "verification",
-            "2fa",
+            "2fa code is required",
+            "auth code is required",
             "auth-code",
             "auth code",
             "two-factor",
             "two factor",
             "security code",
-            "incorrect login",
-            "-22406",
-            "-22421",
-            "mzfinance.badlogin",
-            "2fa code is required",
-            "auth code is required",
-            "badlogin",
+            "verification code",
+            "enter 2fa",
+            "2fa code",
         )
+        # Broad "2fa" token, but not inside unrelated words.
+        if "2fa" in text:
+            return True
         return any(marker in text for marker in markers)
 
     def search(self, term: str, limit: int = 10) -> list[SearchResult]:

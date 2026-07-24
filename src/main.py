@@ -1020,6 +1020,8 @@ class RestoreIosApp(ctk.CTk):
         self._try_init_ipatool()
         if not self.ipatool:
             return
+        # A previous «Отмена» установки оставляла cancel-флаг и ломала вход.
+        self.ipatool.clear_cancel()
 
         def on_success(result: dict, email: str) -> None:
             self.config_manager.set_apple_account(email)

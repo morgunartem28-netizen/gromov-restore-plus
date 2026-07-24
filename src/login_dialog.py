@@ -99,7 +99,7 @@ class AppleLoginDialog(ctk.CTkToplevel):
 
         self.code_entry = ctk.CTkEntry(
             self,
-            placeholder_text="6 цифр с iPhone или Mac",
+            placeholder_text="Появится после первого «Войти»",
             height=40,
             corner_radius=12,
             fg_color=THEME["input"],
@@ -111,10 +111,12 @@ class AppleLoginDialog(ctk.CTkToplevel):
 
         self.hint_label = ctk.CTkLabel(
             self,
-            text="1. Введите email и пароль, нажмите «Войти».\n"
-            "2. Код придёт на iPhone или Mac.\n"
-            "3. Введите код сразу — он действует ~30 секунд.\n"
-            "4. Снова нажмите «Войти» (email и пароль остаются).",
+            text="1. Введите email и пароль → «Войти» (поле кода пока пустое).\n"
+            "2. Если Apple запросит 2FA — код придёт уведомлением на доверенный "
+            "iPhone/iPad/Mac (реже SMS). Это не email.\n"
+            "3. Введите 6 цифр сразу (~30 сек) → снова «Войти».\n"
+            "4. Если вместо кода видите ошибку — код не отправлялся: проверьте "
+            "пароль и подождите пару минут.",
             wraplength=440,
             justify="left",
             text_color=THEME["muted"],
@@ -175,21 +177,10 @@ class AppleLoginDialog(ctk.CTkToplevel):
                 self.after(0, lambda: self.login_button.configure(state="normal"))
                 return
             except IpatoolError as exc:
-                message = IpatoolClient.format_error(str(exc))
-                if IpatoolClient.needs_two_factor(message) and not code:
-                    self.after(0, lambda: self.password_entry.insert(0, password))
-                    self.after(
-                        0,
-                        lambda: self._set_status(
-                            "Код отправлен на iPhone или Mac.\n"
-                            "Введите 6 цифр в поле выше и снова нажмите «Войти».",
-                            error=False,
-                        ),
-                    )
-                    self.after(0, lambda: self.code_entry.focus_set())
-                else:
-                    password = ""
-                    self.after(0, lambda m=message: self._set_status(m, error=True))
+                # auth_login already formats most errors; do not re-classify as 2FA.
+                message = str(exc).strip() or "Не удалось войти в Apple ID."
+                password = ""
+                self.after(0, lambda m=message: self._set_status(m, error=True))
                 self.after(0, lambda: self.login_button.configure(state="normal"))
                 return
 
