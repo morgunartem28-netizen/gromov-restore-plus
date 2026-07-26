@@ -29,8 +29,9 @@ class AppleLoginDialog(ctk.CTkToplevel):
         self._anim = AnimationRunner(self)
 
         self.title("Вход в Apple ID — GROMOV Restore+")
-        self.geometry("500x540")
-        self.resizable(False, False)
+        self.geometry("500x560")
+        self.minsize(460, 420)
+        self.resizable(False, True)
         self.transient(parent)
         self.grab_set()
         self.configure(fg_color=THEME["bg"])
@@ -38,7 +39,7 @@ class AppleLoginDialog(ctk.CTkToplevel):
         fade_in_window(self)
 
         header = glass_frame(self)
-        header.pack(fill="x", padx=24, pady=(24, 14))
+        header.pack(fill="x", padx=24, pady=(24, 12))
 
         if icon_loader:
             logo = icon_loader.get_logo(44)
@@ -65,8 +66,18 @@ class AppleLoginDialog(ctk.CTkToplevel):
             font=ui_font(13),
         ).pack(anchor="w", pady=(6, 0))
 
-        self.email_entry = ctk.CTkEntry(
+        # Scrollable body so fields + long 2FA hints stay reachable on short screens.
+        # Solid fg_color — transparent CTkScrollableFrame canvas often mismatches theme.
+        body = ctk.CTkScrollableFrame(
             self,
+            fg_color=THEME["bg"],
+            scrollbar_button_color=THEME["chip"],
+            scrollbar_button_hover_color=THEME["glass_hover"],
+        )
+        body.pack(fill="both", expand=True, padx=24, pady=(0, 8))
+
+        self.email_entry = ctk.CTkEntry(
+            body,
             placeholder_text="Email Apple ID",
             height=40,
             corner_radius=12,
@@ -75,10 +86,10 @@ class AppleLoginDialog(ctk.CTkToplevel):
             text_color=THEME["silver"],
             font=ui_font(13),
         )
-        self.email_entry.pack(fill="x", padx=24, pady=6)
+        self.email_entry.pack(fill="x", pady=6)
 
         self.password_entry = ctk.CTkEntry(
-            self,
+            body,
             placeholder_text="Пароль",
             show="*",
             height=40,
@@ -88,17 +99,17 @@ class AppleLoginDialog(ctk.CTkToplevel):
             text_color=THEME["silver"],
             font=ui_font(13),
         )
-        self.password_entry.pack(fill="x", padx=24, pady=6)
+        self.password_entry.pack(fill="x", pady=6)
 
         ctk.CTkLabel(
-            self,
+            body,
             text="Код подтверждения (2FA)",
             font=ui_font(14, weight="bold"),
             text_color=THEME["silver"],
-        ).pack(anchor="w", padx=24, pady=(16, 6))
+        ).pack(anchor="w", pady=(16, 6))
 
         self.code_entry = ctk.CTkEntry(
-            self,
+            body,
             placeholder_text="Появится после первого «Войти»",
             height=40,
             corner_radius=12,
@@ -107,28 +118,35 @@ class AppleLoginDialog(ctk.CTkToplevel):
             text_color=THEME["silver"],
             font=ui_font(13),
         )
-        self.code_entry.pack(fill="x", padx=24, pady=6)
+        self.code_entry.pack(fill="x", pady=6)
 
         self.hint_label = ctk.CTkLabel(
-            self,
+            body,
             text="1. Введите email и пароль → «Войти» (поле кода пока пустое).\n"
             "2. Если Apple запросит 2FA — код придёт уведомлением на доверенный "
             "iPhone/iPad/Mac (реже SMS). Это не email.\n"
             "3. Введите 6 цифр сразу (~30 сек) → снова «Войти».\n"
             "4. Если вместо кода видите ошибку — код не отправлялся: проверьте "
             "пароль и подождите пару минут.",
-            wraplength=440,
+            wraplength=420,
             justify="left",
             text_color=THEME["muted"],
             font=ui_font(12),
         )
-        self.hint_label.pack(anchor="w", padx=24, pady=(10, 14))
+        self.hint_label.pack(anchor="w", pady=(10, 10))
 
-        self.status_label = ctk.CTkLabel(self, text="", wraplength=440, justify="left", font=ui_font(12))
-        self.status_label.pack(anchor="w", padx=24, pady=(0, 10))
+        self.status_label = ctk.CTkLabel(
+            body,
+            text="",
+            wraplength=420,
+            justify="left",
+            font=ui_font(12),
+        )
+        self.status_label.pack(anchor="w", pady=(0, 8))
 
+        # Pinned footer — primary actions stay reachable without scrolling.
         buttons = ctk.CTkFrame(self, fg_color="transparent")
-        buttons.pack(fill="x", padx=24, pady=(0, 24))
+        buttons.pack(fill="x", padx=24, pady=(4, 20))
 
         self.login_button = primary_button(
             buttons,

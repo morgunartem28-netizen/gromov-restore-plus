@@ -49,7 +49,7 @@
     {
       "id": "vk-video",
       "title": "VK Видео",
-      "bundleId": "com.vk.vkvideo",
+      "bundleId": "com.vk.vkvideo.prod",
       "appId": 6447614666,
       "description": "Фильмы, сериалы и шоу VK",
       "iconUrl": "",

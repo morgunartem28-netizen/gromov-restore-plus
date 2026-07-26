@@ -157,6 +157,8 @@ class ConfigManager:
         "avito": "ru.avito.app",
         # У Почты Mail.ru (511310430) в IPA bundle ID — ru.mail.mail.
         "mailru": "ru.mail.mail",
+        # В IPA VK Видео — com.vk.vkvideo.prod (каталог раньше брал Android-id).
+        "vk-video": "com.vk.vkvideo.prod",
     }
 
     def _migrate_known_app_ids(self) -> None:

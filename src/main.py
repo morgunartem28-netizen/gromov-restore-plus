@@ -1085,9 +1085,9 @@ class RestoreIosApp(ctk.CTk):
     ) -> None:
         dialog = ctk.CTkToplevel(self)
         dialog.title(title)
-        dialog.geometry("540x400")
-        dialog.minsize(500, 360)
-        dialog.resizable(False, False)
+        dialog.geometry("540x420")
+        dialog.minsize(480, 320)
+        dialog.resizable(False, True)
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(fg_color=THEME["bg"])
@@ -1105,15 +1105,24 @@ class RestoreIosApp(ctk.CTk):
             anchor="w",
         ).pack(anchor="w", padx=18, pady=(16, 8))
 
-        ctk.CTkLabel(
+        # Scrollable message — long update notes / errors must not push buttons off-screen.
+        body = ctk.CTkScrollableFrame(
             card,
+            fg_color=THEME["bg"],
+            scrollbar_button_color=THEME["chip"],
+            scrollbar_button_hover_color=THEME["glass_hover"],
+        )
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+
+        ctk.CTkLabel(
+            body,
             text=message,
             font=ui_font(13),
             text_color=THEME["text_secondary"],
             justify="left",
             anchor="nw",
             wraplength=450,
-        ).pack(anchor="w", fill="both", expand=True, padx=18, pady=(0, 8))
+        ).pack(anchor="w", fill="x", padx=8, pady=(0, 8))
 
         if link_text:
 
@@ -1123,8 +1132,8 @@ class RestoreIosApp(ctk.CTk):
                 else:
                     self._open_update_in_browser(browser_url)
 
-            ghost_button(card, text=link_text, command=_link, anchor="w").pack(
-                anchor="w", padx=14, pady=(0, 8)
+            ghost_button(body, text=link_text, command=_link, anchor="w").pack(
+                anchor="w", padx=4, pady=(0, 8)
             )
 
         buttons = ctk.CTkFrame(card, fg_color="transparent")
@@ -1931,34 +1940,43 @@ class RestoreIosApp(ctk.CTk):
     def _show_help(self) -> None:
         dialog = ctk.CTkToplevel(self)
         dialog.title("Помощь")
-        dialog.geometry("400x240")
-        dialog.resizable(False, False)
+        dialog.geometry("400x260")
+        dialog.minsize(360, 220)
+        dialog.resizable(False, True)
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(fg_color=THEME["bg"])
         dialog.after(50, lambda: apply_glass_window(dialog, dark=True))
         fade_in_window(dialog)
 
+        body = ctk.CTkScrollableFrame(
+            dialog,
+            fg_color=THEME["bg"],
+            scrollbar_button_color=THEME["chip"],
+            scrollbar_button_hover_color=THEME["glass_hover"],
+        )
+        body.pack(fill="both", expand=True, padx=12, pady=(12, 4))
+
         if logo := self.icon_loader.get_logo(36):
             self._icon_refs.append(logo)
-            ctk.CTkLabel(dialog, text="", image=logo).pack(anchor="w", padx=24, pady=(24, 12))
+            ctk.CTkLabel(body, text="", image=logo).pack(anchor="w", padx=12, pady=(12, 12))
 
         ctk.CTkLabel(
-            dialog,
+            body,
             text="Нужна помощь?",
             font=ui_font(18, weight="bold"),
             text_color=THEME["silver"],
-        ).pack(anchor="w", padx=24, pady=(0, 6))
+        ).pack(anchor="w", padx=12, pady=(0, 6))
 
         ctk.CTkLabel(
-            dialog,
+            body,
             text="Telegram @art_gromov",
             font=ui_font(15),
             text_color=THEME["accent"],
-        ).pack(anchor="w", padx=24, pady=(0, 20))
+        ).pack(anchor="w", padx=12, pady=(0, 12))
 
         buttons = ctk.CTkFrame(dialog, fg_color="transparent")
-        buttons.pack(fill="x", padx=24, pady=(0, 24))
+        buttons.pack(fill="x", padx=24, pady=(4, 20))
 
         primary_button(
             buttons,

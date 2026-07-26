@@ -1,13 +1,13 @@
 {
-  "version": "1.2.11",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.11/GROMOV-RestorePlus-Setup.exe",
+  "version": "1.2.12",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.12/GROMOV-RestorePlus-Setup.exe",
   "setup_urls": [
-    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.11/GROMOV-RestorePlus-Setup.exe",
-    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.11/GROMOV-RestorePlus-Setup.exe",
-    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.11/GROMOV-RestorePlus-Setup.exe",
-    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.11/GROMOV-RestorePlus-Setup.exe",
-    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.11/GROMOV-RestorePlus-Setup.exe"
+    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.12/GROMOV-RestorePlus-Setup.exe",
+    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.12/GROMOV-RestorePlus-Setup.exe",
+    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.12/GROMOV-RestorePlus-Setup.exe",
+    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.12/GROMOV-RestorePlus-Setup.exe",
+    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.2.12/GROMOV-RestorePlus-Setup.exe"
   ],
-  "sha256": "4ef3bc24217e225ddedd4c05336f1886697374ea0005dedb818a7451aa055d8f",
-  "notes": "Вышло обновление 1.2.11\nУлучшена авторизация Apple ID: честные сообщения об ошибках и исправление сбоя входа после отмены установки."
+  "sha256": "7bebbf82244fe0b721966e66bc3fcd6a6dc09fe75e9f3cab0c263fb5fca5475d",
+  "notes": "Вышло обновление 1.2.12\nИсправлены VK Видео (bundleId) и отображение меню авторизации — кнопки снова доступны при прокрутке."
 }

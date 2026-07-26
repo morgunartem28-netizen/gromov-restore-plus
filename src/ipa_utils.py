@@ -13,6 +13,8 @@ IPA_CACHE_MAX_AGE_DAYS = 7
 _BUNDLE_EQUIVALENTS: tuple[frozenset[str], ...] = (
     frozenset({"ru.avito.Avito", "ru.avito.app"}),
     frozenset({"ru.mail.mailapp", "ru.mail.mail"}),
+    # В IPA VK Видео — com.vk.vkvideo.prod (не com.vk.vkvideo как на Android).
+    frozenset({"com.vk.vkvideo", "com.vk.vkvideo.prod"}),
 )
 
 
