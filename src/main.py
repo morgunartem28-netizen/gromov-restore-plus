@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -34,11 +35,11 @@ from theme import (
     THEME,
     apply_theme,
     empty_state,
-    ghost_button,
     glass_frame,
     primary_button,
     secondary_button,
     skeleton_card,
+    status_pill,
     ui_font,
 )
 from toast import ToastHost
@@ -54,17 +55,22 @@ from ui_animations import (
     reveal_card,
 )
 from update_checker import (
-    GITHUB_RELEASES_LATEST,
+    UpdateCancelled,
     UpdateCheckError,
     UpdateCheckResult,
     check_for_updates,
     download_verified_installer,
-    resolve_browser_download_url,
+    sanitize_update_message,
     update_debug_log_path,
 )
 from user_errors import friendly_error
 from version import APP_VERSION
 from window_effects import apply_glass_window
+
+_SUPPORT_TELEGRAM = "https://t.me/gromov_restore"
+_SUPPORT_TELEGRAM_APP = "tg://resolve?domain=gromov_restore"
+_IFI_VPN_URL = "https://my.ifivpn.biz/auth?lang=ru"
+_IFI_PROMO_CODE = "GROMOV"
 
 _INSTALL_PHASES = (
     ("prepare", "Подготовка"),
@@ -119,7 +125,8 @@ class RestoreIosApp(ctk.CTk):
         self._log_visible = False
         self._version_click_count = 0
         self._toasts: ToastHost | None = None
-        self._last_setup_url: str | None = None
+        self._update_cancel: threading.Event | None = None
+        self._update_busy = False
         self._install_queue = InstallQueue(
             worker=self._queue_worker,
             on_changed=lambda: self.after(0, self._refresh_queue_ui),
@@ -218,6 +225,7 @@ class RestoreIosApp(ctk.CTk):
             command=self._check_updates,
         )
         self.update_button.pack(side="left", padx=(0, 8))
+        bind_press_feedback(self._anim, self.update_button)
 
         self.help_button = primary_button(
             header_actions,
@@ -229,11 +237,23 @@ class RestoreIosApp(ctk.CTk):
             command=self._show_help,
         )
         self.help_button.pack(side="left")
+        bind_press_feedback(self._anim, self.help_button)
 
-        sidebar = glass_frame(self, width=290)
-        sidebar.grid(row=1, column=0, sticky="nsw", padx=(16, 8), pady=12)
-        sidebar.grid_propagate(False)
-        self._sidebar = sidebar
+        sidebar_shell = glass_frame(self, width=300)
+        sidebar_shell.grid(row=1, column=0, sticky="nsw", padx=(16, 8), pady=12)
+        sidebar_shell.grid_propagate(False)
+        sidebar_shell.grid_rowconfigure(0, weight=1)
+        sidebar_shell.grid_columnconfigure(0, weight=1)
+        self._sidebar = sidebar_shell
+
+        sidebar = ctk.CTkScrollableFrame(
+            sidebar_shell,
+            fg_color="transparent",
+            width=280,
+            scrollbar_button_color=THEME["glass_border"],
+            scrollbar_button_hover_color=THEME["muted"],
+        )
+        sidebar.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
 
         self._section_label(sidebar, "Apple ID")
         self.auth_status_label = ctk.CTkLabel(
@@ -245,7 +265,9 @@ class RestoreIosApp(ctk.CTk):
         )
         self.auth_status_label.pack(anchor="w", padx=16, pady=(0, 10))
 
-        self._action_button(sidebar, "Войти в Apple ID", self._login_dialog).pack(fill="x", padx=14, pady=4)
+        login_btn = self._action_button(sidebar, "Войти в Apple ID", self._login_dialog)
+        login_btn.pack(fill="x", padx=14, pady=4)
+        bind_press_feedback(self._anim, login_btn)
         self._action_button(sidebar, "Проверить вход", self._update_auth_status, secondary=True).pack(
             fill="x", padx=14, pady=4
         )
@@ -253,20 +275,53 @@ class RestoreIosApp(ctk.CTk):
             fill="x", padx=14, pady=4
         )
 
-        self._section_label(sidebar, "Устройство", top_pad=20)
-        self.readiness_label = ctk.CTkLabel(
-            sidebar,
-            text="Проверка системы...",
-            wraplength=250,
-            justify="left",
-            text_color=THEME["muted"],
-        )
-        self.readiness_label.pack(anchor="w", padx=16, pady=(0, 10))
+        self._section_label(sidebar, "Устройства", top_pad=20)
+        device_card = glass_frame(sidebar, elevated=True, corner_radius=16)
+        device_card.pack(fill="x", padx=12, pady=(0, 8))
 
-        self._action_button(sidebar, "Проверить iPhone", self._check_device).pack(fill="x", padx=14, pady=4)
+        self.device_name_label = ctk.CTkLabel(
+            device_card,
+            text="iPhone не подключён",
+            font=ui_font(15, weight="bold"),
+            text_color=THEME["text"],
+            anchor="w",
+            wraplength=240,
+            justify="left",
+        )
+        self.device_name_label.pack(anchor="w", padx=14, pady=(12, 4))
+
+        status_row = ctk.CTkFrame(device_card, fg_color="transparent")
+        status_row.pack(anchor="w", fill="x", padx=14, pady=(0, 4))
+        self.device_status_pill = status_pill(status_row, "Нет связи", tone="neutral")
+        self.device_status_pill.pack(side="left")
+
+        self.device_connection_label = ctk.CTkLabel(
+            device_card,
+            text="Подключение: —",
+            font=ui_font(12),
+            text_color=THEME["muted"],
+            anchor="w",
+        )
+        self.device_connection_label.pack(anchor="w", padx=14, pady=(0, 4))
+
+        self.readiness_label = ctk.CTkLabel(
+            device_card,
+            text="Проверка системы...",
+            wraplength=240,
+            justify="left",
+            font=ui_font(12),
+            text_color=THEME["text_secondary"],
+        )
+        self.readiness_label.pack(anchor="w", padx=14, pady=(0, 12))
+
+        check_dev_btn = self._action_button(sidebar, "Проверить iPhone", self._check_device)
+        check_dev_btn.pack(fill="x", padx=14, pady=4)
+        bind_press_feedback(self._anim, check_dev_btn)
         self._action_button(sidebar, "Установить драйверы Apple", self._install_drivers, secondary=True).pack(
             fill="x", padx=14, pady=4
         )
+
+        self._build_ifi_promo(sidebar)
 
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.grid(row=1, column=1, sticky="nsew", padx=(8, 16), pady=12)
@@ -458,6 +513,116 @@ class RestoreIosApp(ctk.CTk):
         if secondary:
             return secondary_button(parent, text=text, command=command)
         return primary_button(parent, text=text, command=command)
+
+    def _build_ifi_promo(self, parent: ctk.CTkBaseClass) -> None:
+        """IFI.VPN promo card — left sidebar, under Devices."""
+        card = ctk.CTkFrame(
+            parent,
+            fg_color=THEME["promo"],
+            corner_radius=16,
+            border_width=1,
+            border_color=THEME["promo_border"],
+        )
+        card.pack(fill="x", padx=12, pady=(16, 14))
+
+        def open_ifi(_event: object = None) -> None:
+            webbrowser.open(_IFI_VPN_URL)
+
+        def on_enter(_event: object = None) -> None:
+            card.configure(fg_color=THEME["promo_hover"], border_color=THEME["glass_border_bright"])
+
+        def on_leave(_event: object = None) -> None:
+            card.configure(fg_color=THEME["promo"], border_color=THEME["promo_border"])
+
+        card.bind("<Enter>", on_enter)
+        card.bind("<Leave>", on_leave)
+        card.bind("<Button-1>", open_ifi)
+        card.configure(cursor="hand2")
+
+        ctk.CTkLabel(
+            card,
+            text="IFI.VPN",
+            font=ui_font(16, weight="bold"),
+            text_color=THEME["silver"],
+            anchor="w",
+        ).pack(anchor="w", padx=14, pady=(12, 2))
+
+        ctk.CTkLabel(
+            card,
+            text="VPN для безопасного и стабильного подключения",
+            font=ui_font(12),
+            text_color=THEME["muted"],
+            wraplength=240,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        # Stacked promo block: code chip → discount → full-width Copy
+        # (side-by-side clipped «Копировать» in the narrow sidebar)
+        promo_block = ctk.CTkFrame(card, fg_color="transparent")
+        promo_block.pack(fill="x", padx=14, pady=(0, 6))
+
+        code_chip = ctk.CTkFrame(
+            promo_block,
+            fg_color=THEME["chip"],
+            corner_radius=10,
+            border_width=1,
+            border_color=THEME["glass_border"],
+        )
+        code_chip.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(
+            code_chip,
+            text=_IFI_PROMO_CODE,
+            font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
+            text_color=THEME["accent"],
+            anchor="center",
+        ).pack(fill="x", padx=10, pady=6)
+
+        ctk.CTkLabel(
+            promo_block,
+            text="Скидка 20%",
+            font=ui_font(14, weight="bold"),
+            text_color=THEME["silver"],
+            anchor="center",
+        ).pack(fill="x", pady=(2, 8))
+
+        def copy_promo() -> None:
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(_IFI_PROMO_CODE)
+                self._toast("Промокод скопирован", kind="success")
+            except tk.TclError:
+                self._toast("Не удалось скопировать промокод", kind="warning")
+
+        copy_btn = secondary_button(
+            promo_block,
+            text="Копировать",
+            command=copy_promo,
+            height=30,
+            font=ui_font(12, weight="bold"),
+        )
+        copy_btn.pack(fill="x")
+        # Don't bubble click to card open
+        copy_btn.bind("<Button-1>", lambda e: "break")
+
+        cta = primary_button(
+            card,
+            text="Открыть IFI.VPN",
+            command=open_ifi,
+            height=34,
+            font=ui_font(12, weight="bold"),
+        )
+        cta.pack(fill="x", padx=14, pady=(4, 12))
+        bind_press_feedback(self._anim, cta)
+
+    def _open_telegram_support(self) -> None:
+        """Open support chat in Telegram app if possible, else browser."""
+        try:
+            os.startfile(_SUPPORT_TELEGRAM_APP)  # noqa: S606
+            return
+        except OSError:
+            pass
+        webbrowser.open(_SUPPORT_TELEGRAM)
 
     def _style_app_list(self) -> None:
         """Keep CTkScrollableFrame canvas/scrollbar in sync with THEME["bg"]."""
@@ -674,6 +839,7 @@ class RestoreIosApp(ctk.CTk):
             # Auto-bind only when idle; mid-queue target stays on job.udid.
             self._selected_udid = devices[0].udid
             self.settings.selected_udid = devices[0].udid
+        self._apply_device_ui(devices)
 
     def _poll_usb_devices(self) -> None:
         """Refresh USB readiness periodically so plug/unplug is reflected without restart."""
@@ -717,10 +883,7 @@ class RestoreIosApp(ctk.CTk):
             return None
         if not devices:
             messagebox.showwarning("iPhone", self._usb_not_connected_message())
-            driver_line = (
-                "Драйверы Apple: установлены" if apple_drivers_installed() else "Драйверы Apple: не установлены"
-            )
-            self.readiness_label.configure(text=f"{driver_line}\niPhone по USB: не найден")
+            self._apply_device_ui([])
             return None
         if len(devices) == 1:
             device = devices[0]
@@ -788,7 +951,7 @@ class RestoreIosApp(ctk.CTk):
                     0,
                     lambda: messagebox.showinfo(
                         "Поддержка",
-                        f"Отчёт сохранён:\n{path}\n\nОтправьте файл в Telegram @art_gromov",
+                        f"Отчёт сохранён:\n{path}\n\nОтправьте файл в Telegram @gromov_restore",
                     ),
                 )
                 try:
@@ -865,30 +1028,96 @@ class RestoreIosApp(ctk.CTk):
         return callback
 
     def _collect_readiness(self) -> tuple[str, str, str]:
+        driver_ok = apple_drivers_installed()
         driver_line = (
-            "Драйверы Apple: установлены"
-            if apple_drivers_installed()
-            else "Драйверы Apple: не установлены"
+            "Драйверы Apple: установлены" if driver_ok else "Драйверы Apple: не установлены"
         )
         try:
             devices = self.device_installer.list_usb_devices()
             if len(devices) == 1:
                 device = devices[0]
-                device_name = device.label
-                if len(device_name) > 42:
-                    device_name = device_name[:39] + "..."
-                device_line = f"USB: {device_name}"
+                device_name = device.name or "iPhone"
+                if len(device_name) > 36:
+                    device_name = device_name[:33] + "..."
+                device_line = f"USB: {device.label}"
             elif len(devices) > 1:
                 device_line = f"USB: подключено {len(devices)} iPhone — выберите при установке"
             else:
                 device_line = "USB: iPhone не найден"
         except DeviceInstallerError:
+            devices = []
             device_line = "USB: iPhone не найден"
         return driver_line, device_line, f"{driver_line}\n{device_line}"
 
+    def _apply_device_ui(self, devices: list[DeviceInfo] | None = None) -> None:
+        """Refresh Devices card: name, status pill, connection, driver hint."""
+        if devices is None:
+            try:
+                devices = self.device_installer.list_usb_devices()
+            except DeviceInstallerError:
+                devices = []
+
+        driver_ok = apple_drivers_installed()
+        driver_hint = (
+            "Драйверы Apple установлены" if driver_ok else "Нужны драйверы Apple"
+        )
+
+        name_label = getattr(self, "device_name_label", None)
+        status_widget = getattr(self, "device_status_pill", None)
+        conn_label = getattr(self, "device_connection_label", None)
+        ready_label = getattr(self, "readiness_label", None)
+        if name_label is None:
+            return
+
+        if len(devices) == 1:
+            device = devices[0]
+            name = device.name or "iPhone"
+            meta = " · ".join(p for p in (device.model, f"iOS {device.ios_version}" if device.ios_version else "") if p)
+            name_label.configure(text=name if not meta else f"{name}\n{meta}")
+            if status_widget is not None:
+                status_widget.configure(
+                    text="Подключён",
+                    fg_color=THEME["success_soft"],
+                    text_color=THEME["success"],
+                )
+            if conn_label is not None:
+                conn_label.configure(text="Подключение: USB")
+            if ready_label is not None:
+                ready_label.configure(text=driver_hint)
+        elif len(devices) > 1:
+            name_label.configure(text=f"{len(devices)} iPhone по USB")
+            if status_widget is not None:
+                status_widget.configure(
+                    text="Несколько устройств",
+                    fg_color=THEME["accent_soft"],
+                    text_color=THEME["accent"],
+                )
+            if conn_label is not None:
+                conn_label.configure(text="Подключение: USB — выберите при установке")
+            if ready_label is not None:
+                ready_label.configure(text=driver_hint)
+        else:
+            name_label.configure(text="iPhone не подключён")
+            if status_widget is not None:
+                status_widget.configure(
+                    text="Нет связи",
+                    fg_color=THEME["chip"],
+                    text_color=THEME["text_secondary"],
+                )
+            if conn_label is not None:
+                conn_label.configure(text="Подключение: —")
+            if ready_label is not None:
+                ready_label.configure(
+                    text=f"{driver_hint}\nПодключите iPhone кабелем USB"
+                )
+
     def _refresh_readiness(self, *, log: bool = False) -> None:
         driver_line, device_line, combined = self._collect_readiness()
-        self.readiness_label.configure(text=combined)
+        try:
+            devices = self.device_installer.list_usb_devices()
+        except DeviceInstallerError:
+            devices = []
+        self._apply_device_ui(devices)
         if log:
             self._log("--- Проверка системы ---")
             self._log(driver_line)
@@ -917,8 +1146,8 @@ class RestoreIosApp(ctk.CTk):
             except Exception:
                 pass
 
-            driver_line, device_line, combined = self._collect_readiness()
-            self.after(0, lambda: self.readiness_label.configure(text=combined))
+            driver_line, device_line, _combined = self._collect_readiness()
+            self.after(0, self._refresh_readiness)
             self.after(0, lambda: self._log("--- Проверка при запуске ---"))
             self.after(0, lambda: self._log(driver_line))
             self.after(0, lambda: self._log(device_line))
@@ -1064,11 +1293,6 @@ class RestoreIosApp(ctk.CTk):
 
         self._run_async(task)
 
-    def _open_update_in_browser(self, setup_url: str | None = None) -> None:
-        url = resolve_browser_download_url(setup_url or self._last_setup_url)
-        self._log(f"Открыта загрузка Setup в браузере:\n{url}")
-        webbrowser.open(url)
-
     def _show_update_action_dialog(
         self,
         *,
@@ -1079,14 +1303,11 @@ class RestoreIosApp(ctk.CTk):
         secondary_text: str = "",
         on_secondary: Callable[[], None] | None = None,
         tertiary_text: str = "Закрыть",
-        browser_url: str | None = None,
-        link_text: str | None = None,
-        on_link: Callable[[], None] | None = None,
     ) -> None:
         dialog = ctk.CTkToplevel(self)
         dialog.title(title)
-        dialog.geometry("540x420")
-        dialog.minsize(480, 320)
+        dialog.geometry("520x400")
+        dialog.minsize(460, 300)
         dialog.resizable(False, True)
         dialog.transient(self)
         dialog.grab_set()
@@ -1094,7 +1315,7 @@ class RestoreIosApp(ctk.CTk):
         dialog.after(50, lambda: apply_glass_window(dialog, dark=True))
         fade_in_window(dialog)
 
-        card = glass_frame(dialog)
+        card = glass_frame(dialog, elevated=True)
         card.pack(fill="both", expand=True, padx=20, pady=20)
 
         ctk.CTkLabel(
@@ -1105,36 +1326,24 @@ class RestoreIosApp(ctk.CTk):
             anchor="w",
         ).pack(anchor="w", padx=18, pady=(16, 8))
 
-        # Scrollable message — long update notes / errors must not push buttons off-screen.
         body = ctk.CTkScrollableFrame(
             card,
-            fg_color=THEME["bg"],
+            fg_color=THEME["bg_soft"],
+            corner_radius=12,
             scrollbar_button_color=THEME["chip"],
             scrollbar_button_hover_color=THEME["glass_hover"],
         )
-        body.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+        body.pack(fill="both", expand=True, padx=14, pady=(0, 4))
 
         ctk.CTkLabel(
             body,
-            text=message,
+            text=sanitize_update_message(message),
             font=ui_font(13),
             text_color=THEME["text_secondary"],
             justify="left",
             anchor="nw",
-            wraplength=450,
-        ).pack(anchor="w", fill="x", padx=8, pady=(0, 8))
-
-        if link_text:
-
-            def _link() -> None:
-                if on_link:
-                    on_link()
-                else:
-                    self._open_update_in_browser(browser_url)
-
-            ghost_button(body, text=link_text, command=_link, anchor="w").pack(
-                anchor="w", padx=4, pady=(0, 8)
-            )
+            wraplength=430,
+        ).pack(anchor="w", fill="x", padx=10, pady=(8, 10))
 
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.pack(fill="x", padx=14, pady=(8, 16))
@@ -1144,20 +1353,22 @@ class RestoreIosApp(ctk.CTk):
             if action:
                 action()
 
-        primary_button(
+        primary_btn = primary_button(
             buttons,
             text=primary_text,
             command=lambda: close_then(on_primary),
-            width=180,
+            width=160,
             height=40,
-        ).pack(side="right")
+        )
+        primary_btn.pack(side="right")
+        bind_press_feedback(self._anim, primary_btn)
 
         if secondary_text:
             secondary_button(
                 buttons,
                 text=secondary_text,
                 command=lambda: close_then(on_secondary),
-                width=280 if len(secondary_text) > 12 else 120,
+                width=140 if len(secondary_text) <= 14 else 180,
                 height=40,
                 font=ui_font(12),
             ).pack(side="right", padx=(0, 8))
@@ -1171,47 +1382,167 @@ class RestoreIosApp(ctk.CTk):
                 height=40,
             ).pack(side="left")
 
+    def _launch_verified_setup(self, installer: Path) -> None:
+        """Start silent Inno Setup and quit so the update can replace files."""
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            subprocess.Popen(  # noqa: S603 — local SHA256-verified Setup.exe
+                [str(installer), "/VERYSILENT", "/NORESTART", "/CLOSEAPPLICATIONS"],
+                close_fds=True,
+                creationflags=flags,
+            )
+            self._log("Запущен проверенный установщик обновления.")
+        except OSError as exc:
+            raise UpdateCheckError(
+                f"Файл проверен, но не удалось запустить установщик:\n{exc}"
+            ) from exc
+
     def _download_update(self, result: UpdateCheckResult) -> None:
+        if self._update_busy:
+            messagebox.showwarning("Обновление", "Обновление уже выполняется.")
+            return
         if not result.setup_url:
             self._show_update_action_dialog(
-                title="Обновление",
+                title="GROMOV Restore+",
                 message=(
-                    "Ссылка на установщик не указана в манифесте обновлений.\n"
-                    "Можно открыть страницу релизов в браузере."
+                    "В манифесте обновлений нет ссылки на установщик.\n"
+                    "Повторите проверку позже или напишите в поддержку."
                 ),
-                primary_text="Открыть в браузере",
-                on_primary=lambda: self._open_update_in_browser(None),
+                primary_text="Повторить",
+                on_primary=self._check_updates,
                 secondary_text="",
                 tertiary_text="Закрыть",
             )
             return
         if not result.sha256:
             self._show_update_action_dialog(
-                title="Обновление",
+                title="GROMOV Restore+",
                 message=(
                     "В манифесте нет SHA256 установщика.\n"
-                    "Встроенная загрузка отменена — так безопаснее.\n\n"
-                    "Скачайте установщик в браузере с официальной страницы релизов."
+                    "Загрузка отменена — так безопаснее.\n"
+                    "Повторите проверку позже."
                 ),
-                primary_text="Открыть в браузере",
-                on_primary=lambda: self._open_update_in_browser(result.setup_url),
+                primary_text="Повторить",
+                on_primary=self._check_updates,
                 secondary_text="",
                 tertiary_text="Закрыть",
-                browser_url=result.setup_url,
             )
             return
 
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Обновление GROMOV Restore+")
+        dialog.geometry("460x280")
+        dialog.minsize(420, 260)
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.configure(fg_color=THEME["bg"])
+        dialog.after(50, lambda: apply_glass_window(dialog, dark=True))
+        fade_in_window(dialog)
+
+        card = glass_frame(dialog, elevated=True)
+        card.pack(fill="both", expand=True, padx=18, pady=18)
+
+        ctk.CTkLabel(
+            card,
+            text="Обновление",
+            font=ui_font(18, weight="bold"),
+            text_color=THEME["text"],
+        ).pack(anchor="w", padx=18, pady=(14, 4))
+
+        status_label = ctk.CTkLabel(
+            card,
+            text="Проверяем обновление...",
+            font=ui_font(13),
+            text_color=THEME["text_secondary"],
+            anchor="w",
+        )
+        status_label.pack(anchor="w", fill="x", padx=18, pady=(4, 8))
+
+        percent_label = ctk.CTkLabel(
+            card,
+            text="",
+            font=ui_font(12, weight="bold"),
+            text_color=THEME["accent"],
+            anchor="e",
+        )
+        percent_label.pack(anchor="e", padx=18)
+
+        bar = ctk.CTkProgressBar(
+            card,
+            height=10,
+            corner_radius=8,
+            progress_color=THEME["accent"],
+            fg_color=THEME["glass_border"],
+        )
+        bar.pack(fill="x", padx=18, pady=(4, 12))
+        bar.set(0.02)
+
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(fill="x", padx=14, pady=(8, 14))
+
+        cancel_event = threading.Event()
+        self._update_cancel = cancel_event
+        self._update_busy = True
+        finished = {"done": False}
+
+        def set_ui(status: str, ratio: float | None = None, percent: str = "") -> None:
+            if not dialog.winfo_exists():
+                return
+            status_label.configure(text=status)
+            if percent:
+                percent_label.configure(text=percent)
+            if ratio is not None:
+                bar.set(max(0.0, min(1.0, ratio)))
+
+        def show_error(message: str) -> None:
+            if not dialog.winfo_exists():
+                return
+            self._update_busy = False
+            set_ui("Не удалось скачать обновление", 0.0, "")
+            status_label.configure(text=sanitize_update_message(message), text_color=THEME["error"])
+            for child in buttons.winfo_children():
+                child.destroy()
+
+            def retry() -> None:
+                dialog.destroy()
+                self._download_update(result)
+
+            primary_button(buttons, text="Повторить", command=retry, width=120, height=36).pack(
+                side="right"
+            )
+            secondary_button(buttons, text="Отмена", command=dialog.destroy, width=100, height=36).pack(
+                side="right", padx=(0, 8)
+            )
+
+        def on_cancel() -> None:
+            cancel_event.set()
+            if not finished["done"]:
+                set_ui("Отмена...", None)
+
+        cancel_btn = secondary_button(buttons, text="Отмена", command=on_cancel, width=100, height=36)
+        cancel_btn.pack(side="left")
+        # Same as «Отмена»: closing via title-bar X must abort download (not leave _update_busy stuck).
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+
         def download_task() -> None:
-            self.after(0, lambda: self._set_progress("Скачивание обновления...", 0.05))
+            self.after(0, lambda: set_ui("Проверяем обновление...", 0.05))
 
             def on_progress(ratio: float) -> None:
+                pct = int(ratio * 100)
                 self.after(
                     0,
-                    lambda r=ratio: self._set_progress(
-                        f"Скачивание обновления... {int(r * 100)}%",
-                        0.05 + r * 0.9,
+                    lambda r=ratio, p=pct: set_ui(
+                        f"Загрузка обновления {p}%",
+                        0.05 + r * 0.75,
+                        f"{p}%",
                     ),
                 )
+
+            def on_status(text: str) -> None:
+                if text.startswith("Загрузка"):
+                    return
+                self.after(0, lambda t=text: set_ui(t, None))
 
             try:
                 installer = download_verified_installer(
@@ -1220,154 +1551,143 @@ class RestoreIosApp(ctk.CTk):
                     version=result.latest_version,
                     on_progress=on_progress,
                     setup_urls=result.setup_urls,
+                    cancel_event=cancel_event,
+                    on_status=on_status,
                 )
+            except UpdateCancelled:
+                finished["done"] = True
+                self._update_busy = False
+                self.after(0, lambda: dialog.destroy() if dialog.winfo_exists() else None)
+                self.after(0, lambda: self._log("Обновление отменено."))
+                return
             except UpdateCheckError as exc:
-                message = str(exc)
+                message = sanitize_update_message(str(exc))
                 debug_path = update_debug_log_path()
                 self.after(0, lambda m=message: self._log(m))
-                self.after(
-                    0,
-                    lambda p=debug_path: self._log(
-                        f"Диагностика обновления (файл): {p}"
-                    ),
-                )
-                self.after(
-                    0,
-                    lambda m=message: self._show_update_action_dialog(
-                        title="Не удалось скачать обновление",
-                        message=(
-                            f"{m}\n\n"
-                            "Рекомендуем скачать в браузере — там обычно доступны "
-                            "другие зеркала (GitHub + прокси), даже когда встроенная "
-                            "загрузка не проходит."
-                        ),
-                        primary_text="Скачать в браузере",
-                        on_primary=lambda: self._open_update_in_browser(result.setup_url),
-                        secondary_text="Повторить в приложении",
-                        on_secondary=lambda: self._download_update(result),
-                        tertiary_text="Закрыть",
-                    ),
-                )
+                self.after(0, lambda p=debug_path: self._log(f"Диагностика обновления (файл): {p}"))
+                self.after(0, lambda m=message: show_error(m))
+                return
+            except Exception as exc:  # noqa: BLE001
+                message = f"Не удалось скачать обновление.\n{type(exc).__name__}: {exc}"
+                self.after(0, lambda m=message: show_error(sanitize_update_message(m)))
                 return
 
-            self.after(0, lambda: self._set_progress("Проверка завершена", 1.0))
+            self.after(0, lambda: set_ui("Подготовка обновления...", 0.92, "100%"))
+            try:
+                self._launch_verified_setup(installer)
+            except UpdateCheckError as exc:
+                self.after(0, lambda m=str(exc): show_error(m))
+                return
+
+            finished["done"] = True
+            self._update_busy = False
+            self.after(0, lambda: set_ui("Обновление готово", 1.0, "100%"))
             self.after(0, lambda: self._log(f"Установщик проверен: {installer.name}"))
+            self.after(0, lambda: self._toast("Обновление готово — перезапуск…", kind="success"))
 
-            def launch() -> None:
+            def restart() -> None:
                 try:
-                    os.startfile(str(installer))  # noqa: S606 — verified local Setup.exe
-                    self._log("Запущен проверенный установщик.")
-                except OSError as exc:
-                    self._show_update_action_dialog(
-                        title="Обновление",
-                        message=(
-                            f"Файл проверен, но не удалось открыть установщик:\n{exc}\n\n"
-                            f"Откройте вручную:\n{installer}\n\n"
-                            "Или скачайте заново в браузере."
-                        ),
-                        primary_text="Открыть в браузере",
-                        on_primary=lambda: self._open_update_in_browser(result.setup_url),
-                        secondary_text="",
-                        tertiary_text="Закрыть",
-                        browser_url=result.setup_url,
-                    )
+                    if dialog.winfo_exists():
+                        dialog.destroy()
+                except tk.TclError:
+                    pass
+                self.quit()
 
-            self.after(0, launch)
+            self.after(1200, restart)
 
-        self._run_async(download_task)
+        threading.Thread(target=download_task, daemon=True).start()
 
     def _present_update_available(self, result: UpdateCheckResult) -> None:
-        if result.setup_url:
-            self._last_setup_url = result.setup_url
-        # Browser-first: same path that worked on other PCs (system TLS/proxy).
-        self._open_update_in_browser(result.setup_url)
-        self._toast(
-            "Скачивание обновления открыто в браузере — установите Setup",
-            kind="info",
-        )
         notes = f"\n\n{result.notes}" if result.notes else ""
         message = (
-            f"Доступна новая версия {result.latest_version}.\n"
-            f"Текущая версия: {result.current_version}.{notes}\n\n"
-            "Скачивание обновления открыто в браузере — установите Setup.\n"
-            "Это надёжнее на разных ПК (антивирус, прокси, блокировка GitHub).\n"
-            "При желании можно скачать внутри приложения (проверка SHA256)."
+            f"Версия {result.latest_version}\n"
+            f"Текущая: {result.current_version}.{notes}\n\n"
+            "Обновление установится внутри приложения "
+            "(загрузка, проверка SHA256, перезапуск)."
         )
+
+        def start_download() -> None:
+            self._download_update(result)
+
+        if self._toasts is not None:
+            try:
+                self._toasts.show_action(
+                    f"Доступно обновление {result.latest_version}",
+                    primary_text="Обновить",
+                    on_primary=start_download,
+                    secondary_text="Позже",
+                )
+            except Exception:
+                pass
+
         self._show_update_action_dialog(
-            title="Доступно обновление",
+            title="Доступно новое обновление",
             message=message,
-            primary_text="Открыть снова в браузере",
-            on_primary=lambda: self._open_update_in_browser(result.setup_url),
-            secondary_text="Скачать в приложении",
-            on_secondary=lambda: self._download_update(result),
+            primary_text="Обновить",
+            on_primary=start_download,
+            secondary_text="",
             tertiary_text="Позже",
-            browser_url=result.setup_url,
         )
 
     def _present_update_check_failure(self, message: str) -> None:
-        releases_url = GITHUB_RELEASES_LATEST
-        self._log(f"Открыта страница релизов в браузере:\n{releases_url}")
-        webbrowser.open(releases_url)
-        self._toast(
-            "Страница загрузки открыта в браузере",
-            kind="warning",
-        )
+        safe = sanitize_update_message(message)
+        self._toast("Не удалось проверить обновления", kind="warning")
         self._show_update_action_dialog(
-            title="Не удалось проверить обновления",
+            title="GROMOV Restore+",
             message=(
-                f"{message}\n\n"
-                "Проверка из приложения может не пройти, даже если сайт GitHub "
-                "открывается в браузере (другой путь сети, TLS, блокировка CDN).\n\n"
-                "Страница релизов уже открыта в браузере — скачайте Setup оттуда."
+                f"{safe}\n\n"
+                "Проверьте интернет, VPN или другую сеть, затем повторите."
             ),
-            primary_text="Открыть релизы в браузере",
-            on_primary=lambda: webbrowser.open(GITHUB_RELEASES_LATEST),
-            secondary_text="Повторить проверку",
-            on_secondary=self._check_updates,
+            primary_text="Повторить",
+            on_primary=self._check_updates,
+            secondary_text="",
             tertiary_text="Закрыть",
         )
 
     def _check_updates(self) -> None:
+        if self._update_busy:
+            messagebox.showwarning("Обновление", "Обновление уже выполняется.")
+            return
+
         def task() -> None:
             self.after(0, lambda: self._log("Проверка обновлений..."))
+            self.after(
+                0,
+                lambda: self.update_button.configure(state="disabled", text="…"),
+            )
             try:
                 result = check_for_updates()
             except UpdateCheckError as exc:
-                message = str(exc)
+                message = sanitize_update_message(str(exc))
                 debug_path = update_debug_log_path()
                 self.after(0, lambda m=message: self._log(f"Обновление: {m}"))
-                self.after(
-                    0,
-                    lambda p=debug_path: self._log(
-                        f"Диагностика обновления (файл): {p}"
-                    ),
-                )
+                self.after(0, lambda p=debug_path: self._log(f"Диагностика обновления (файл): {p}"))
                 self.after(0, lambda m=message: self._present_update_check_failure(m))
                 return
-            except Exception as exc:  # noqa: BLE001 — surface unexpected transport bugs
+            except Exception as exc:  # noqa: BLE001
                 message = (
                     "Не удалось проверить обновления из-за внутренней ошибки.\n"
                     f"{type(exc).__name__}: {exc}"
                 )
                 debug_path = update_debug_log_path()
                 self.after(0, lambda m=message: self._log(f"Обновление: {m}"))
+                self.after(0, lambda p=debug_path: self._log(f"Диагностика обновления (файл): {p}"))
                 self.after(
                     0,
-                    lambda p=debug_path: self._log(
-                        f"Диагностика обновления (файл): {p}"
-                    ),
+                    lambda m=sanitize_update_message(message): self._present_update_check_failure(m),
                 )
-                self.after(0, lambda m=message: self._present_update_check_failure(m))
                 return
-
-            if result.setup_url:
-                self._last_setup_url = result.setup_url
+            finally:
+                self.after(
+                    0,
+                    lambda: self.update_button.configure(state="normal", text="Обновить"),
+                )
 
             if result.is_up_to_date:
-                text = f"У вас актуальная версия ({result.current_version})."
+                text = f"У вас установлена последняя версия ({result.current_version})."
                 self.after(0, lambda: self._log(text))
                 self.after(0, lambda: self._toast(text, kind="success"))
-                self.after(0, lambda: messagebox.showinfo("Обновление", text))
+                self.after(0, lambda: messagebox.showinfo("GROMOV Restore+", text))
                 return
 
             self.after(0, lambda: self._log(f"Доступна версия {result.latest_version}."))
@@ -1939,9 +2259,9 @@ class RestoreIosApp(ctk.CTk):
 
     def _show_help(self) -> None:
         dialog = ctk.CTkToplevel(self)
-        dialog.title("Помощь")
-        dialog.geometry("400x260")
-        dialog.minsize(360, 220)
+        dialog.title("Помощь — GROMOV Restore+")
+        dialog.geometry("440x340")
+        dialog.minsize(400, 300)
         dialog.resizable(False, True)
         dialog.transient(self)
         dialog.grab_set()
@@ -1949,44 +2269,71 @@ class RestoreIosApp(ctk.CTk):
         dialog.after(50, lambda: apply_glass_window(dialog, dark=True))
         fade_in_window(dialog)
 
+        card = glass_frame(dialog, elevated=True)
+        card.pack(fill="both", expand=True, padx=16, pady=16)
+        card.grid_rowconfigure(0, weight=1)
+        card.grid_columnconfigure(0, weight=1)
+
         body = ctk.CTkScrollableFrame(
-            dialog,
-            fg_color=THEME["bg"],
+            card,
+            fg_color="transparent",
             scrollbar_button_color=THEME["chip"],
             scrollbar_button_hover_color=THEME["glass_hover"],
         )
-        body.pack(fill="both", expand=True, padx=12, pady=(12, 4))
+        body.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 4))
 
-        if logo := self.icon_loader.get_logo(36):
+        if logo := self.icon_loader.get_logo(40):
             self._icon_refs.append(logo)
-            ctk.CTkLabel(body, text="", image=logo).pack(anchor="w", padx=12, pady=(12, 12))
+            ctk.CTkLabel(body, text="", image=logo).pack(anchor="w", padx=12, pady=(8, 12))
 
         ctk.CTkLabel(
             body,
             text="Нужна помощь?",
-            font=ui_font(18, weight="bold"),
+            font=ui_font(20, weight="bold"),
             text_color=THEME["silver"],
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
         ctk.CTkLabel(
             body,
-            text="Telegram @art_gromov",
-            font=ui_font(15),
+            text=(
+                "Напишите в Telegram — ответим по установке приложений, "
+                "драйверам Apple и обновлениям GROMOV Restore+."
+            ),
+            font=ui_font(13),
+            text_color=THEME["text_secondary"],
+            wraplength=360,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", padx=12, pady=(0, 10))
+
+        tg_link = ctk.CTkLabel(
+            body,
+            text="Telegram @gromov_restore",
+            font=ui_font(15, weight="bold"),
             text_color=THEME["accent"],
-        ).pack(anchor="w", padx=12, pady=(0, 12))
+            cursor="hand2",
+        )
+        tg_link.pack(anchor="w", padx=12, pady=(0, 8))
+        tg_link.bind("<Button-1>", lambda _e: self._open_telegram_support())
 
-        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
-        buttons.pack(fill="x", padx=24, pady=(4, 20))
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.grid(row=1, column=0, sticky="ew", padx=16, pady=(8, 16))
 
-        primary_button(
+        write_btn = primary_button(
             buttons,
             text="Написать",
-            command=lambda: webbrowser.open("https://t.me/art_gromov"),
-            width=120,
-        ).pack(side="right")
-        secondary_button(buttons, text="Закрыть", command=dialog.destroy, width=100).pack(side="right", padx=(0, 8))
+            command=self._open_telegram_support,
+            width=130,
+        )
+        write_btn.pack(side="right")
+        bind_press_feedback(self._anim, write_btn)
+        secondary_button(buttons, text="Закрыть", command=dialog.destroy, width=110).pack(
+            side="right", padx=(0, 8)
+        )
 
     def _check_device(self) -> None:
+        if getattr(self, "device_connection_label", None) is not None:
+            self.device_connection_label.configure(text="Подключение: проверка…")
         self.readiness_label.configure(text="Проверка USB...")
 
         def task() -> None:
@@ -1995,30 +2342,22 @@ class RestoreIosApp(ctk.CTk):
 
                 def done() -> None:
                     self._remember_devices(devices)
-                    driver_ok = apple_drivers_installed()
-                    driver_line = (
-                        "Драйверы Apple: установлены" if driver_ok else "Драйверы Apple: не установлены"
-                    )
                     if devices:
                         if len(devices) == 1:
-                            device_line = f"USB: {devices[0].label}"
                             body = (
                                 "Подключён по USB и готов к установке:\n\n"
                                 + devices[0].detail_lines
                             )
                         else:
-                            device_line = f"USB: подключено {len(devices)} iPhone"
                             body = (
                                 "Подключено несколько iPhone по USB.\n"
                                 "При установке нужно будет выбрать устройство.\n\n"
                                 + "\n\n".join(d.detail_lines for d in devices)
                             )
-                        self.readiness_label.configure(text=f"{driver_line}\n{device_line}")
                         lines = "\n".join(f"• {d.label} (USB)" for d in devices)
                         self._log("USB-устройства:\n" + lines)
                         messagebox.showinfo("iPhone (USB)", body)
                     else:
-                        self.readiness_label.configure(text=f"{driver_line}\nUSB: iPhone не найден")
                         self._log("iPhone по USB не найден.")
                         messagebox.showwarning("iPhone", self._usb_not_connected_message())
 

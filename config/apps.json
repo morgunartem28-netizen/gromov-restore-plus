@@ -58,7 +58,7 @@
     {
       "id": "vk-music",
       "title": "VK Музыка",
-      "bundleId": "com.vk.vkclient.music",
+      "bundleId": "com.music.vk",
       "appId": 1054372220,
       "description": "Музыка, подкасты и аудиокниги VK",
       "iconUrl": "",

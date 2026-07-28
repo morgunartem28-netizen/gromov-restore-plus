@@ -129,6 +129,10 @@ class UpdateCheckError(RuntimeError):
     pass
 
 
+class UpdateCancelled(UpdateCheckError):
+    """Raised when the user cancels an in-app download."""
+
+
 @dataclass(frozen=True)
 class UpdateCheckResult:
     current_version: str
@@ -382,7 +386,7 @@ def _format_transport_error(exc: BaseException, *, action: str) -> str:
             "или отклонено.\n"
             "Часто это блокировка GitHub/CDN у провайдера, фаервол или антивирус — "
             "не обязательно отсутствие интернета.\n"
-            "Откройте version.json в браузере, попробуйте VPN или другую сеть."
+            "Попробуйте VPN или другую сеть."
         )
 
     detail = _reason_text(exc)
@@ -398,8 +402,18 @@ def _format_transport_error(exc: BaseException, *, action: str) -> str:
     return (
         f"{action} не удалась.\n"
         "Не удалось связаться с сервером обновлений.\n"
-        "Проверьте доступ к GitHub или смените сеть/VPN."
+        "Проверьте сеть или попробуйте VPN."
     )
+
+
+def sanitize_update_message(message: str) -> str:
+    """Strip URLs and mirror hosts from user-facing update errors."""
+    text = re.sub(r"https?://[^\s\]\)\"']+", "", message or "", flags=re.IGNORECASE)
+    text = re.sub(r"(?im)^\s*Скачайте Setup\.exe в браузере:.*$", "", text)
+    text = re.sub(r"(?im)^\s*Откройте.*в браузере.*$", "", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _read_manifest_urls() -> list[str]:
@@ -885,10 +899,9 @@ def _fetch_manifest(urls: list[str]) -> dict:
     raise UpdateCheckError(
         "Не удалось получить манифест обновлений ни с одного зеркала.\n"
         f"Детали: {summary}\n\n"
-        "Если интернет работает, GitHub/CDN может быть недоступен "
+        "Если интернет работает, сервер обновлений может быть недоступен "
         "(блокировка провайдера/фаервол/антивирус).\n"
-        "Откройте ссылку version.json в браузере, попробуйте VPN "
-        "или другую сеть и нажмите «Обновить» снова."
+        "Попробуйте VPN или другую сеть и нажмите «Обновить» снова."
     )
 
 
@@ -959,6 +972,7 @@ def _download_installer_once(
     temp: Path,
     expected: str,
     on_progress: Callable[[float], None] | None,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     """Download one URL into *temp*; return hex sha256. Raises UpdateCheckError."""
     if not is_trusted_update_url(setup_url):
@@ -986,10 +1000,12 @@ def _download_installer_once(
             # Reject HTML error pages from broken proxies before hashing a full body.
             if "text/html" in content_type.lower() and total and total < 2_000_000:
                 raise UpdateCheckError(
-                    f"Зеркало {host} вернуло HTML вместо установщика."
+                    "Сервер обновлений вернул HTML вместо установщика."
                 )
             with temp.open("wb") as handle:
                 while True:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise UpdateCancelled("Загрузка обновления отменена.")
                     chunk = response.read(_HASH_CHUNK)
                     if not chunk:
                         break
@@ -1045,6 +1061,13 @@ def _download_installer_once(
         _debug_exception(f"download OSError host={host}", exc)
         raise UpdateCheckError(f"Не удалось сохранить установщик:\n{exc}") from exc
 
+    if cancel_event is not None and cancel_event.is_set():
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise UpdateCancelled("Загрузка обновления отменена.")
+
     actual = digest.hexdigest()
     if actual != expected:
         try:
@@ -1056,8 +1079,8 @@ def _download_installer_once(
             f"actual={actual} bytes={received}"
         )
         raise UpdateCheckError(
-            f"Проверка SHA256 не пройдена (зеркало {host}) — "
-            "файл повреждён или подменён."
+            "Проверка SHA256 не пройдена — файл повреждён или подменён.\n"
+            "Обновление прервано для вашей безопасности."
         )
     return actual
 
@@ -1069,12 +1092,19 @@ def download_verified_installer(
     version: str,
     on_progress: Callable[[float], None] | None = None,
     setup_urls: list[str] | tuple[str, ...] = (),
+    cancel_event: threading.Event | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> Path:
     """Download Setup.exe into AppData and verify SHA-256 before returning the path.
 
     Tries GitHub Releases first, then manifest ``setup_urls``, then known GitHub
     release proxies (gh-proxy / ghfast). Always uses data_dir()/updates.
+    Never surfaces download URLs to the caller — only Russian UX messages.
     """
+    def status(text: str) -> None:
+        if on_status:
+            on_status(text)
+
     candidates = expand_setup_download_urls(
         setup_url, setup_urls, version=version
     )
@@ -1102,10 +1132,16 @@ def download_verified_installer(
     dest = updates_dir / f"GROMOV-RestorePlus-Setup-{safe_version}.exe"
     temp = dest.with_suffix(".exe.part")
 
+    if cancel_event is not None and cancel_event.is_set():
+        raise UpdateCancelled("Загрузка обновления отменена.")
+
     if dest.is_file():
         try:
+            status("Проверка файла...")
             if file_sha256(dest) == expected:
                 _debug_log(f"download cache hit path={dest}")
+                if on_progress:
+                    on_progress(1.0)
                 return dest
             dest.unlink(missing_ok=True)
             _debug_log("download cache stale (sha mismatch), re-downloading")
@@ -1115,22 +1151,38 @@ def download_verified_installer(
     errors: list[str] = []
     last_exc: BaseException | None = None
     for index, url in enumerate(candidates, start=1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise UpdateCancelled("Загрузка обновления отменена.")
         host = _manifest_host(url)
         _debug_log(f"download mirror {index}/{len(candidates)} host={host}")
         if on_progress and index > 1:
             on_progress(0.02)
         try:
+            status("Загрузка обновления...")
             actual = _download_installer_once(
                 setup_url=url,
                 temp=temp,
                 expected=expected,
                 on_progress=on_progress,
+                cancel_event=cancel_event,
             )
+            status("Проверка файла...")
             try:
                 temp.replace(dest)
             except OSError as exc:
                 _debug_exception("download replace OSError", exc)
                 raise UpdateCheckError(f"Не удалось сохранить установщик:\n{exc}") from exc
+            # Re-hash final file (reject corrupt replace / AV rewrite).
+            final_hash = file_sha256(dest)
+            if final_hash != expected:
+                try:
+                    dest.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise UpdateCheckError(
+                    "Проверка SHA256 не пройдена — файл повреждён или подменён.\n"
+                    "Обновление прервано для вашей безопасности."
+                )
             if on_progress:
                 on_progress(1.0)
             _debug_log(
@@ -1138,24 +1190,25 @@ def download_verified_installer(
                 f"sha256={actual} via={host} ==="
             )
             return dest
+        except UpdateCancelled:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         except UpdateCheckError as exc:
             last_exc = exc
             line = str(exc).split("\n", 1)[0]
-            errors.append(f"{host}: {line}")
+            errors.append(line)
             _debug_log(f"download mirror fail host={host} ui={line}")
             continue
 
-    summary = "; ".join(errors[:4]) if errors else "нет деталей"
-    browser_hint = next(
-        (u for u in candidates if u and not _is_html_landing_url(u)),
-        GITHUB_SETUP_LATEST,
-    )
+    summary = "; ".join(errors[:3]) if errors else "нет деталей"
     message = (
-        "Не удалось скачать установщик ни с одного зеркала.\n"
+        "Не удалось скачать обновление.\n"
         f"Детали: {summary}\n\n"
-        "Встроенная загрузка часто падает при блокировке GitHub/CDN, "
-        "антивирусе или прокси — даже если браузер открывает ту же ссылку.\n"
-        f"Скачайте Setup.exe в браузере:\n{browser_hint}"
+        "Часто мешают блокировка GitHub/CDN, антивирус или прокси.\n"
+        "Попробуйте VPN или другую сеть, затем нажмите «Повторить»."
     )
     if last_exc is not None:
         raise UpdateCheckError(message) from last_exc

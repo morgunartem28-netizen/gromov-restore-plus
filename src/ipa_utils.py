@@ -15,6 +15,8 @@ _BUNDLE_EQUIVALENTS: tuple[frozenset[str], ...] = (
     frozenset({"ru.mail.mailapp", "ru.mail.mail"}),
     # В IPA VK Видео — com.vk.vkvideo.prod (не com.vk.vkvideo как на Android).
     frozenset({"com.vk.vkvideo", "com.vk.vkvideo.prod"}),
+    # VK Музыка: старый выдуманный catalog-id ↔ реальный iOS bundle.
+    frozenset({"com.vk.vkclient.music", "com.music.vk"}),
 )
 
 

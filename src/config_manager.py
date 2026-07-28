@@ -159,6 +159,9 @@ class ConfigManager:
         "mailru": "ru.mail.mail",
         # В IPA VK Видео — com.vk.vkvideo.prod (каталог раньше брал Android-id).
         "vk-video": "com.vk.vkvideo.prod",
+        # VK Музыка (1054372220): в каталоге был выдуманный com.vk.vkclient.music;
+        # IPA-хабы индексируют как com.music.vk (подтвердить CFBundleIdentifier при появлении IPA).
+        "vk-music": "com.music.vk",
     }
 
     def _migrate_known_app_ids(self) -> None:

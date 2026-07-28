@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
-# Graphite + Apple Blue — dark-only premium palette.
+# Graphite + Apple Blue — dark-only premium palette (2026 refresh).
 DARK_THEME: dict[str, str] = {
-    "bg": "#0F1115",
-    "bg_soft": "#171A21",
-    "surface": "#1C1F26",
-    "surface_elevated": "#242833",
+    "bg": "#0C0E12",
+    "bg_soft": "#141820",
+    "surface": "#1A1E27",
+    "surface_elevated": "#222833",
     "silver": "#F5F5F7",
     "text": "#F5F5F7",
     "text_secondary": "#AEAEB2",
     "muted": "#8E8E93",
     "accent": "#0A84FF",
     "accent_hover": "#409CFF",
+    "accent_pressed": "#0066CC",
     "accent_soft": "#0A2540",
+    "accent_glow": "#0A84FF",
     "accent_text": "#FFFFFF",
     "success": "#30D158",
     "success_soft": "#0F2A1A",
@@ -22,29 +24,34 @@ DARK_THEME: dict[str, str] = {
     "warning_soft": "#2A2208",
     "error": "#FF453A",
     "error_soft": "#2A1210",
-    "glass": "#1C1F26",
-    "glass_hover": "#242833",
+    "glass": "#1A1E27",
+    "glass_hover": "#252B38",
     "glass_selected": "#0A2540",
-    "glass_border": "#2C313C",
-    "glass_border_bright": "#3A4050",
+    "glass_border": "#2E3544",
+    "glass_border_bright": "#4A5568",
     "glass_highlight": "#0A2540",
-    "input": "#171A21",
-    "input_focus": "#242833",
-    "log": "#14161C",
-    "skeleton": "#242833",
-    "skeleton_shine": "#2C313C",
+    "input": "#12151C",
+    "input_focus": "#1E2430",
+    "log": "#10131A",
+    "skeleton": "#252B38",
+    "skeleton_shine": "#323A4A",
     "shadow": "#000000",
-    "chip": "#242833",
+    "chip": "#252B38",
     "chip_active": "#0A84FF",
     "chip_active_text": "#FFFFFF",
+    "promo": "#151A24",
+    "promo_border": "#2A3344",
+    "promo_hover": "#1C2433",
+    "disabled": "#3A3F4A",
+    "disabled_text": "#6B7080",
 }
 
 THEME: dict[str, str] = dict(DARK_THEME)
 _THEME_MODE = "dark"
 
-CORNER_RADIUS = 18
-CARD_PADX = 16
-CARD_PADY = 14
+CORNER_RADIUS = 20
+CARD_PADX = 18
+CARD_PADY = 16
 RADIUS_PILL = 999
 
 
@@ -83,13 +90,21 @@ def ui_font(size: int, *, weight: str = "normal") -> ctk.CTkFont:
     return ctk.CTkFont(size=size, weight=weight)
 
 
-def glass_frame(parent: ctk.CTkBaseClass, *, highlight: bool = False, **kwargs) -> ctk.CTkFrame:
-    defaults = {
-        "fg_color": THEME["glass_selected"] if highlight else THEME["glass"],
-        "corner_radius": CORNER_RADIUS,
-        "border_width": 1,
-        "border_color": THEME["accent"] if highlight else THEME["glass_border"],
-    }
+def glass_frame(parent: ctk.CTkBaseClass, *, highlight: bool = False, elevated: bool = False, **kwargs) -> ctk.CTkFrame:
+    if elevated:
+        defaults = {
+            "fg_color": THEME["surface_elevated"],
+            "corner_radius": CORNER_RADIUS,
+            "border_width": 1,
+            "border_color": THEME["glass_border_bright"],
+        }
+    else:
+        defaults = {
+            "fg_color": THEME["glass_selected"] if highlight else THEME["glass"],
+            "corner_radius": CORNER_RADIUS,
+            "border_width": 1,
+            "border_color": THEME["accent"] if highlight else THEME["glass_border"],
+        }
     defaults.update(kwargs)
     return ctk.CTkFrame(parent, **defaults)
 
@@ -102,6 +117,7 @@ def primary_button(parent: ctk.CTkBaseClass, **kwargs) -> ctk.CTkButton:
         "corner_radius": 14,
         "font": ui_font(14, weight="bold"),
         "height": 42,
+        "border_width": 0,
     }
     defaults.update(kwargs)
     return ctk.CTkButton(parent, **defaults)
@@ -110,9 +126,10 @@ def primary_button(parent: ctk.CTkBaseClass, **kwargs) -> ctk.CTkButton:
 def secondary_button(parent: ctk.CTkBaseClass, **kwargs) -> ctk.CTkButton:
     defaults = {
         "fg_color": THEME["chip"],
-        "hover_color": THEME["bg_soft"],
+        "hover_color": THEME["glass_hover"],
         "text_color": THEME["text"],
-        "border_width": 0,
+        "border_width": 1,
+        "border_color": THEME["glass_border"],
         "corner_radius": 14,
         "font": ui_font(13),
         "height": 40,

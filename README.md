@@ -2,7 +2,7 @@
 
 Восстановление приложений App Store на iPhone (ВКонтакте, MAX, Авито, Почта Mail.ru).
 
-**Поддержка:** Telegram [@art_gromov](https://t.me/art_gromov)
+**Поддержка:** Telegram [@gromov_restore](https://t.me/gromov_restore)
 
 ## Для пользователя
 
