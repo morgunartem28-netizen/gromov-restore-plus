@@ -18,7 +18,11 @@ from datetime import datetime
 from pathlib import Path
 
 from app_paths import data_dir, resource_dir
-from security_utils import github_release_proxy_prefixes, is_trusted_update_url
+from security_utils import (
+    github_release_proxy_prefixes,
+    is_trusted_manifest_url,
+    is_trusted_update_url,
+)
 from version import APP_VERSION
 
 _CHECK_TIMEOUT_SEC = 20
@@ -60,13 +64,11 @@ def _is_html_landing_url(url: str) -> bool:
 # Fallback mirrors when raw.githubusercontent.com is blocked (common in RU)
 # or returns a stale cached copy of version.json.
 # Prefer Contents API / jsDelivr before raw — raw CDN can lag behind main for hours.
+# First-party hosts only — never third-party proxies (they must not define SHA256).
 _BUILTIN_MANIFEST_FALLBACKS = (
     f"https://api.github.com/repos/{_REPO_SLUG}/contents/release/version.json?ref=main",
     f"https://cdn.jsdelivr.net/gh/{_REPO_SLUG}@main/release/version.json",
     f"https://github.com/{_REPO_SLUG}/raw/main/release/version.json",
-    # Verified GitHub proxies when official raw/api hosts are filtered.
-    f"https://gh-proxy.com/{_RAW_MANIFEST}",
-    f"https://edgeone.gh-proxy.com/{_RAW_MANIFEST}",
     _RAW_MANIFEST,
 )
 
@@ -433,20 +435,20 @@ def _read_manifest_urls() -> list[str]:
         if not isinstance(payload, dict):
             continue
         primary = str(payload.get("manifest_url") or "").strip()
-        if primary and is_trusted_update_url(primary):
+        if primary and is_trusted_manifest_url(primary):
             configured.append(primary)
         extras = payload.get("manifest_urls") or []
         if isinstance(extras, list):
             for item in extras:
                 url = str(item or "").strip()
-                if url and is_trusted_update_url(url):
+                if url and is_trusted_manifest_url(url):
                     configured.append(url)
         if configured:
             break
 
     urls: list[str] = []
     for url in [*configured, *_BUILTIN_MANIFEST_FALLBACKS]:
-        if url and is_trusted_update_url(url) and url not in urls:
+        if url and is_trusted_manifest_url(url) and url not in urls:
             urls.append(url)
     return urls
 

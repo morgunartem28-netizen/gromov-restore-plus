@@ -16,7 +16,8 @@
       "bundleId": "ru.avito.app",
       "appId": 417281773,
       "description": "Официальное приложение Авито. Нужна лицензия в вашем Apple ID.",
-      "iconUrl": ""
+      "iconUrl": "",
+      "iconFile": "avito.png"
     },
     {
       "id": "mailru",
@@ -24,7 +25,8 @@
       "bundleId": "ru.mail.mail",
       "appId": 511310430,
       "description": "Официальная почта Mail.ru.",
-      "iconUrl": ""
+      "iconUrl": "",
+      "iconFile": "mailru.png"
     }
   ]
 }

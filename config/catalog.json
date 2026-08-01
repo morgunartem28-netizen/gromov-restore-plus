@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "newDays": 30,
+  "popular": [
+    "max",
+    "vk",
+    "@version:avito",
+    "@bank:sber",
+    "sber-kids",
+    "@bank:vtb",
+    "@bank:alfa"
+  ],
+  "recommended": [],
+  "versionGroups": {
+    "avito": {
+      "title": "Авито",
+      "iconAppId": "avito",
+      "options": [
+        {
+          "appId": "avito",
+          "label": "Старая версия",
+          "hint": "Классическое Авито"
+        },
+        {
+          "appId": "avito-new",
+          "label": "Новая версия",
+          "hint": "Anero — ваш онлайн помощник"
+        }
+      ]
+    }
+  },
+  "searchAliases": {
+    "тинькофф": ["т-банк", "tbank", "t-bank"],
+    "тбанк": ["т-банк", "tbank"],
+    "тинёк": ["т-банк"],
+    "сбер": ["сбербанк", "sber", "сберkids", "sberkids"],
+    "сберкидс": ["сберkids", "sber-kids", "sberkids"],
+    "авито": ["avito", "anero"],
+    "anero": ["авито", "avito-new"],
+    "альфа": ["alfa", "альфа-банк", "инвестиции"],
+    "инвестиции": ["альфа инвестиции", "alfa-investments", "checkinvest"],
+    "mail": ["mail.ru", "почта"],
+    "почта": ["mail.ru", "mailru"]
+  }
+}

@@ -8,7 +8,8 @@
       "appId": 564177498,
       "description": "Официальное приложение VK",
       "iconUrl": "",
-      "iconFile": "vk.png"
+      "iconFile": "vk.png",
+      "aliases": ["vk", "вк", "vkontakte"]
     },
     {
       "id": "max",
@@ -17,16 +18,32 @@
       "appId": 6739530834,
       "description": "Мессенджер MAX (max.ru)",
       "iconUrl": "https://max.ru/s/img/big-logo.png",
-      "iconFile": "max.png"
+      "iconFile": "max.png",
+      "aliases": ["макс", "max.ru"]
     },
     {
       "id": "avito",
       "title": "Авито",
       "bundleId": "ru.avito.app",
       "appId": 417281773,
-      "description": "Официальное приложение Авито",
+      "description": "Классическое приложение Авито",
       "iconUrl": "",
-      "iconFile": "avito.png"
+      "iconFile": "avito.png",
+      "versionGroup": "avito",
+      "aliases": ["avito", "старая", "классика"],
+      "addedAt": "2025-01-01"
+    },
+    {
+      "id": "avito-new",
+      "title": "Авито",
+      "bundleId": "online.anero.app",
+      "appId": 6786287240,
+      "description": "Авито (новая версия) — Anero",
+      "iconUrl": "",
+      "iconFile": "avito-new.png",
+      "versionGroup": "avito",
+      "aliases": ["anero", "новая", "новая версия"],
+      "addedAt": "2026-08-01"
     },
     {
       "id": "mailru",
@@ -35,7 +52,8 @@
       "appId": 511310430,
       "description": "Официальная почта Mail.ru",
       "iconUrl": "",
-      "iconFile": "mailru.png"
+      "iconFile": "mailru.png",
+      "aliases": ["mail", "mail.ru", "почта"]
     },
     {
       "id": "rutube",
@@ -44,7 +62,8 @@
       "appId": 966511294,
       "description": "Официальное приложение Rutube",
       "iconUrl": "",
-      "iconFile": "rutube.png"
+      "iconFile": "rutube.png",
+      "aliases": ["рутуб", "youtube"]
     },
     {
       "id": "vk-video",
@@ -53,7 +72,8 @@
       "appId": 6447614666,
       "description": "Фильмы, сериалы и шоу VK",
       "iconUrl": "",
-      "iconFile": "vk-video.png"
+      "iconFile": "vk-video.png",
+      "aliases": ["вк видео", "vk video"]
     },
     {
       "id": "vk-music",
@@ -62,7 +82,8 @@
       "appId": 1054372220,
       "description": "Музыка, подкасты и аудиокниги VK",
       "iconUrl": "",
-      "iconFile": "vk-music.png"
+      "iconFile": "vk-music.png",
+      "aliases": ["вк музыка", "vk music"]
     }
   ]
 }

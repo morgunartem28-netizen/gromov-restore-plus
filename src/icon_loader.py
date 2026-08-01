@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import customtkinter as ctk
@@ -32,7 +33,12 @@ class IconLoader:
         self.assets_dir = resource_dir() / "assets"
         self.icons_dir = self.assets_dir / "icons"
         self.cache_dir = data_dir() / "icons"
-        self.icons_dir.mkdir(parents=True, exist_ok=True)
+        # Bundled assets may live under Program Files (read-only for users).
+        # Never crash startup on mkdir — writable cache is LocalAppData.
+        try:
+            self.icons_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, ctk.CTkImage] = {}
         self._pil_cache: dict[str, Image.Image] = {}
@@ -83,6 +89,90 @@ class IconLoader:
         with self._lock:
             self._cache[key] = photo
         return photo
+
+    def peek_app_icon(self, app: AppEntry, size: int = 52) -> ctk.CTkImage | None:
+        """Return cached CTkImage if already built on the UI thread; else None."""
+        key = f"{app.id}:{size}"
+        with self._lock:
+            return self._cache.get(key)
+
+    def peek_bank_group_icon(self, group: BankGroup, size: int = 52) -> ctk.CTkImage | None:
+        key = f"bank:{group.id}:{size}"
+        with self._lock:
+            return self._cache.get(key)
+
+    def schedule_app_icon(
+        self,
+        app: AppEntry,
+        *,
+        size: int,
+        on_ready: Callable[[ctk.CTkImage], None],
+        schedule: Callable[[Callable[[], None]], None],
+    ) -> ctk.CTkImage | None:
+        """Return cached icon or start background PIL load; CTkImage on UI via schedule."""
+        cached = self.peek_app_icon(app, size)
+        if cached is not None:
+            return cached
+
+        def work() -> None:
+            try:
+                path = self._resolve_icon_path_local(app)
+                image = self._load_resized(path, size)
+            except Exception:
+                return
+
+            def apply() -> None:
+                key = f"{app.id}:{size}"
+                with self._lock:
+                    existing = self._cache.get(key)
+                    if existing is not None:
+                        on_ready(existing)
+                        return
+                    photo = self._to_ctk_image(image, size)
+                    self._cache[key] = photo
+                on_ready(photo)
+
+            schedule(apply)
+
+        threading.Thread(target=work, daemon=True).start()
+        return None
+
+    def schedule_bank_group_icon(
+        self,
+        group: BankGroup,
+        *,
+        size: int,
+        on_ready: Callable[[ctk.CTkImage], None],
+        schedule: Callable[[Callable[[], None]], None],
+    ) -> ctk.CTkImage | None:
+        cached = self.peek_bank_group_icon(group, size)
+        if cached is not None:
+            return cached
+
+        def work() -> None:
+            try:
+                path = self.cache_dir / f"bank_{group.id}.png"
+                if not path.exists():
+                    self._generate_bank_icon(group, path)
+                image = self._load_resized(path, size)
+            except Exception:
+                return
+
+            def apply() -> None:
+                key = f"bank:{group.id}:{size}"
+                with self._lock:
+                    existing = self._cache.get(key)
+                    if existing is not None:
+                        on_ready(existing)
+                        return
+                    photo = self._to_ctk_image(image, size)
+                    self._cache[key] = photo
+                on_ready(photo)
+
+            schedule(apply)
+
+        threading.Thread(target=work, daemon=True).start()
+        return None
 
     def warm_apps(self, apps: list[AppEntry], *, size: int = 44) -> None:
         """Preload icons into memory cache (safe to call from background thread for PIL only).

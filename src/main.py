@@ -3,20 +3,115 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
-import tkinter as tk
+import traceback
 import webbrowser
 from pathlib import Path
-from tkinter import messagebox
 from typing import Callable
+
+# --- Startup crash diagnostics (stdlib only; must stay before heavy imports) ---
+
+
+def _startup_crash_log_path() -> Path:
+    """Always LocalAppData — works even if install dir is read-only / broken."""
+    base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "GROMOV" / "RestorePlus"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        base = Path(tempfile.gettempdir()) / "GROMOV-RestorePlus"
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return Path(tempfile.gettempdir()) / "gromov_restoreplus_startup_crash.log"
+    return base / "startup_crash.log"
+
+
+def _write_startup_crash(exc: BaseException) -> Path:
+    path = _startup_crash_log_path()
+    version = "unknown"
+    try:
+        from version import APP_VERSION as _ver  # local import — may itself be failing
+
+        version = str(_ver)
+    except Exception:
+        pass
+    lines = [
+        f"time={time.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"version={version}",
+        f"frozen={bool(getattr(sys, 'frozen', False))}",
+        f"executable={sys.executable}",
+        f"argv={sys.argv!r}",
+        f"cwd={os.getcwd()}",
+        f"exception={type(exc).__name__}: {exc}",
+        "",
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    ]
+    try:
+        path.write_text("\n".join(lines), encoding="utf-8")
+    except OSError:
+        pass
+    return path
+
+
+def _show_startup_crash_dialog(path: Path, exc: BaseException) -> None:
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "GROMOV Restore+",
+            "Не удалось запустить приложение.\n\n"
+            f"{type(exc).__name__}: {exc}\n\n"
+            f"Подробности сохранены в:\n{path}\n\n"
+            "Отправьте этот файл в Telegram @gromov_restore.",
+        )
+        root.destroy()
+    except Exception:
+        pass
+
+
+def _install_startup_excepthook() -> None:
+    """PyInstaller console=False hides stderr — persist uncaught errors to disk."""
+
+    def _hook(exc_type: type[BaseException], exc: BaseException, tb: object) -> None:
+        if issubclass(exc_type, (SystemExit, KeyboardInterrupt)):
+            sys.__excepthook__(exc_type, exc, tb)  # type: ignore[arg-type]
+            return
+        path = _write_startup_crash(exc)
+        _show_startup_crash_dialog(path, exc)
+        sys.__excepthook__(exc_type, exc, tb)  # type: ignore[arg-type]
+
+    sys.excepthook = _hook
+
+
+_install_startup_excepthook()
+
+import tkinter as tk
+from tkinter import messagebox
 
 import customtkinter as ctk
 
 from app_paths import data_dir, ensure_app_dirs, install_dir, resource_dir
 from app_settings import AppSettings
-from config_manager import BANKS_FOLDER_TITLE, BANK_GROUPS, AppEntry, BankGroup, ConfigManager
+from catalog_ui import (
+    VersionPickerOption,
+    catalog_app_card,
+    catalog_tab_bar,
+    letter_header,
+    open_version_picker,
+    section_header,
+)
+from config_manager import (
+    AppEntry,
+    BankGroup,
+    ConfigManager,
+    VersionGroup,
+)
 from device_installer import DeviceInfo, DeviceInstaller, DeviceInstallerError
 from device_picker import pick_usb_device
 from disk_utils import DiskSpaceError, ensure_download_space
@@ -27,18 +122,15 @@ from install_service import run_install_job
 from ipa_utils import purge_stale_ipa_cache, purge_stale_staging
 from ipatool_client import IpatoolCancelled, IpatoolClient, IpatoolError
 from login_dialog import AppleLoginDialog
-from security_utils import mask_email, sanitize_auth_result_for_log
+from security_utils import mask_email, sanitize_auth_result_for_log, verify_setup_authenticode
 from support_report import build_support_report
 from theme import (
-    CARD_PADX,
-    CARD_PADY,
     THEME,
     apply_theme,
     empty_state,
     glass_frame,
     primary_button,
     secondary_button,
-    skeleton_card,
     status_pill,
     ui_font,
 )
@@ -81,6 +173,15 @@ _INSTALL_PHASES = (
     ("done", "Готово"),
 )
 
+_CATALOG_TAB_LABELS = ("Популярные", "Новые", "Банки", "Все")
+_CATALOG_TAB_KEYS = {
+    "Популярные": "popular",
+    "Новые": "new",
+    "Банки": "banks",
+    "Все": "all",
+}
+_CATALOG_TAB_TITLES = {value: key for key, value in _CATALOG_TAB_KEYS.items()}
+
 
 class RestoreIosApp(ctk.CTk):
     def __init__(self) -> None:
@@ -106,15 +207,27 @@ class RestoreIosApp(ctk.CTk):
         self._selected_udid: str | None = self.settings.selected_udid
         self._last_failed_app: AppEntry | None = None
         self._worker: threading.Thread | None = None
+        self._async_busy = False
         self._icon_refs: list[object] = []
+        self._selected_icon_ref: object | None = None
         self._app_rows: dict[str, ctk.CTkFrame] = {}
-        self._catalog_view = "root"
+        self._catalog_panels: dict[str, ctk.CTkFrame] = {}
+        self._catalog_panel_rows: dict[str, dict[str, ctk.CTkFrame]] = {}
+        self._catalog_parent: ctk.CTkFrame | None = None
+        self._catalog_view = "root"  # root | bank (drill-down from Banks tab)
+        self._catalog_tab = "popular"
         self._catalog_bank_group: str | None = None
         self._bank_search_query = ""
         self._global_search_query = ""
         self._catalog_state_path = data_dir() / "catalog_state.json"
         self._catalog_ready = False
         self._catalog_anim_token = 0
+        self._catalog_tabs: ctk.CTkSegmentedButton | None = None
+        self._tabs_wrap: ctk.CTkFrame | None = None
+        self._cancel_install_btn: ctk.CTkButton | None = None
+        self._retry_install_btn: ctk.CTkButton | None = None
+        self._install_card_state = "idle"
+        self._last_installed_title = ""
         self._progress_active = False
         self._progress_anim_id: str | None = None
         self._progress_value = 0.0
@@ -138,12 +251,13 @@ class RestoreIosApp(ctk.CTk):
         self._build_layout()
         self._toasts = ToastHost(self)
         self._restore_catalog_state()
-        self._refresh_app_list()
+        # First paint: only active tab (Популярные) — no skeleton / no full catalog.
+        self.after(0, self._refresh_app_list)
         self._render_recent_searches()
         self.after(50, lambda: apply_glass_window(self, dark=True))
         self.after(200, self._startup_checks)
         self.after(300, self._warm_icon_cache)
-        self.after(400, self._purge_stale_caches)
+        self.after(2500, self._purge_stale_caches)
         self.after(800, self._first_run_driver_nudge)
         self.after(5000, self._poll_usb_devices)
 
@@ -326,48 +440,126 @@ class RestoreIosApp(ctk.CTk):
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.grid(row=1, column=1, sticky="nsew", padx=(8, 16), pady=12)
         main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(3, weight=1)
+        main.grid_rowconfigure(5, weight=1)
 
-        top_bar = glass_frame(main)
-        top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        top_bar.grid_columnconfigure(1, weight=1)
-        self._top_bar = top_bar
+        # Fixed-height install card — always visible, stable layout (pack-only inside).
+        install_card = glass_frame(main)
+        install_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        install_card.configure(height=168)
+        install_card.grid_propagate(False)
+        self._top_bar = install_card
+        self._install_card = install_card
+        self._install_card_state = "idle"
+        self._last_installed_title = ""
 
-        self.selected_icon_label = ctk.CTkLabel(top_bar, text="")
-        self.selected_icon_label.grid(row=0, column=0, padx=(16, 10), pady=14)
+        card_inner = ctk.CTkFrame(install_card, fg_color="transparent")
+        card_inner.pack(fill="both", expand=True, padx=16, pady=12)
 
-        info_wrap = ctk.CTkFrame(top_bar, fg_color="transparent")
-        info_wrap.grid(row=0, column=1, sticky="w", pady=14)
+        head = ctk.CTkFrame(card_inner, fg_color="transparent", height=56)
+        head.pack(fill="x")
+        head.pack_propagate(False)
+
+        self.selected_icon_label = ctk.CTkLabel(
+            head,
+            text="",
+            width=48,
+            height=48,
+            fg_color=THEME["chip"],
+            corner_radius=12,
+        )
+        self.selected_icon_label.pack(side="left", padx=(0, 12))
+
+        info_wrap = ctk.CTkFrame(head, fg_color="transparent")
+        info_wrap.pack(side="left", fill="both", expand=True)
 
         self.selected_label = ctk.CTkLabel(
             info_wrap,
             text="Выберите приложение",
-            font=ui_font(19, weight="bold"),
+            font=ui_font(16, weight="bold"),
             text_color=THEME["silver"],
+            anchor="w",
         )
         self.selected_label.pack(anchor="w")
 
         self.selected_meta_label = ctk.CTkLabel(
             info_wrap,
-            text="Нажмите на карточку в списке ниже",
+            text="Чтобы начать установку, выберите приложение из каталога",
+            font=ui_font(12),
             text_color=THEME["muted"],
+            anchor="w",
+            wraplength=420,
+            justify="left",
         )
         self.selected_meta_label.pack(anchor="w", pady=(2, 0))
 
-        self.install_button = primary_button(
-            top_bar,
-            text="Установить",
-            command=self._install_selected,
-            width=168,
-            height=44,
-            font=ui_font(14, weight="bold"),
+        divider = ctk.CTkFrame(card_inner, fg_color=THEME["glass_border"], height=1)
+        divider.pack(fill="x", pady=(10, 10))
+
+        self._install_progress_wrap = ctk.CTkFrame(card_inner, fg_color="transparent", height=28)
+        self._install_progress_wrap.pack(fill="x")
+        self._install_progress_wrap.pack_propagate(False)
+        self._install_progress_wrap.pack_forget()
+
+        self._install_progress_bar = ctk.CTkProgressBar(
+            self._install_progress_wrap,
+            height=8,
+            progress_color=THEME["accent"],
+            fg_color=THEME["chip"],
+            corner_radius=4,
         )
-        self.install_button.grid(row=0, column=2, padx=(8, 18), pady=16)
+        self._install_progress_bar.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self._install_progress_bar.set(0)
+        self._install_progress_pct = ctk.CTkLabel(
+            self._install_progress_wrap,
+            text="0%",
+            width=44,
+            font=ui_font(12, weight="bold"),
+            text_color=THEME["text_secondary"],
+            anchor="e",
+        )
+        self._install_progress_pct.pack(side="right")
+
+        actions = ctk.CTkFrame(card_inner, fg_color="transparent", height=40)
+        actions.pack(fill="x", pady=(0, 0))
+        actions.pack_propagate(False)
+        self._install_actions = actions
+
+        self.install_button = primary_button(
+            actions,
+            text="Установить приложение",
+            command=self._install_selected,
+            width=220,
+            height=36,
+            font=ui_font(13, weight="bold"),
+            corner_radius=12,
+        )
+        self.install_button.pack(side="left")
+        self.install_button.configure(state="disabled")
         bind_press_feedback(self._anim, self.install_button)
 
+        self._cancel_install_btn = secondary_button(
+            actions,
+            text="Отмена",
+            command=self._cancel_install_queue,
+            width=110,
+            height=36,
+            corner_radius=12,
+        )
+        self._retry_install_btn = secondary_button(
+            actions,
+            text="Повторить",
+            command=self._retry_install_queue,
+            width=120,
+            height=36,
+            corner_radius=12,
+        )
+        # Kept packed/unpacked by state sync — start hidden.
+        self._cancel_install_btn.pack_forget()
+        self._retry_install_btn.pack_forget()
+
         catalog_nav = ctk.CTkFrame(main, fg_color="transparent")
-        catalog_nav.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-        catalog_nav.grid_columnconfigure(2, weight=1)
+        catalog_nav.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        catalog_nav.grid_columnconfigure(1, weight=1)
 
         self.catalog_back_button = secondary_button(
             catalog_nav,
@@ -377,6 +569,7 @@ class RestoreIosApp(ctk.CTk):
             height=32,
         )
         self.catalog_back_button.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.catalog_back_button.grid_remove()
 
         self.catalog_path_label = ctk.CTkLabel(
             catalog_nav,
@@ -385,29 +578,77 @@ class RestoreIosApp(ctk.CTk):
             text_color=THEME["silver"],
             anchor="w",
         )
-        self.catalog_path_label.grid(row=0, column=1, sticky="w", padx=(0, 12))
+        self.catalog_path_label.grid(row=0, column=1, sticky="w")
+
+        # Search — permanent icon + label so the field is obvious even without placeholder.
+        search_wrap = ctk.CTkFrame(
+            main,
+            fg_color=THEME["input"],
+            corner_radius=14,
+            border_width=1,
+            border_color=THEME["glass_border"],
+            height=44,
+        )
+        search_wrap.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        search_wrap.grid_propagate(False)
+        search_wrap.grid_columnconfigure(1, weight=1)
+        self._search_wrap = search_wrap
+
+        search_icon = ctk.CTkLabel(
+            search_wrap,
+            text="🔍",
+            width=28,
+            font=ui_font(15),
+            text_color=THEME["accent"],
+            anchor="center",
+        )
+        search_icon.grid(row=0, column=0, padx=(12, 4), pady=0)
+        self._search_icon = search_icon
 
         self.bank_search_var = tk.StringVar()
         self.bank_search_entry = ctk.CTkEntry(
-            catalog_nav,
+            search_wrap,
             textvariable=self.bank_search_var,
-            placeholder_text="Поиск по каталогу и банкам...",
-            height=36,
-            corner_radius=12,
+            placeholder_text="Поиск приложений...",
+            height=40,
+            corner_radius=10,
+            border_width=0,
             fg_color=THEME["input"],
-            border_color=THEME["glass_border"],
             text_color=THEME["text"],
             placeholder_text_color=THEME["muted"],
+            font=ui_font(14),
         )
-        self.bank_search_entry.grid(row=0, column=2, sticky="ew")
-        self.bank_search_var.trace_add("write", lambda *_: self._search_debouncer.trigger())
+        self.bank_search_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=2)
+        self.bank_search_var.trace_add("write", lambda *_: self._on_search_text_changed())
         self.bank_search_entry.bind("<Return>", lambda _e: self._commit_search())
+        self.bank_search_entry.bind("<FocusIn>", lambda _e: self._on_search_focus(True))
+        self.bank_search_entry.bind("<FocusOut>", lambda _e: self._on_search_focus(False))
+
+        self._search_hint = ctk.CTkLabel(
+            search_wrap,
+            text="Поиск",
+            font=ui_font(11, weight="bold"),
+            text_color=THEME["muted"],
+            width=48,
+            anchor="e",
+        )
+        self._search_hint.grid(row=0, column=2, padx=(0, 12))
+        # Hint hides when user types so it doesn't fight the text.
+        self._update_search_chrome()
+
+        tabs_wrap = ctk.CTkFrame(main, fg_color="transparent")
+        tabs_wrap.grid(row=3, column=0, sticky="ew", pady=(0, 4))
+        self._catalog_tabs = catalog_tab_bar(
+            tabs_wrap,
+            values=list(_CATALOG_TAB_LABELS),
+            command=self._on_catalog_tab,
+            selected=_CATALOG_TAB_TITLES.get(self._catalog_tab, "Популярные"),
+        )
+        self._tabs_wrap = tabs_wrap
 
         self.recent_searches_frame = ctk.CTkFrame(main, fg_color="transparent")
-        self.recent_searches_frame.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        self.recent_searches_frame.grid(row=4, column=0, sticky="ew", pady=(0, 4))
 
-        # Explicit bg — transparent CTkScrollableFrame canvas often mismatches theme
-        # (black gaps in light / white gaps in dark), especially with mica/DWM.
         self.app_list = ctk.CTkScrollableFrame(
             main,
             fg_color=THEME["bg"],
@@ -416,16 +657,13 @@ class RestoreIosApp(ctk.CTk):
             scrollbar_button_color=THEME["glass_border"],
             scrollbar_button_hover_color=THEME["muted"],
         )
-        self.app_list.grid(row=3, column=0, sticky="nsew")
-        self.app_list.grid_columnconfigure(0, weight=1)
-        self.app_list.grid_columnconfigure(1, weight=1)
+        self.app_list.grid(row=5, column=0, sticky="nsew")
         self._style_app_list()
 
         log_frame = glass_frame(main)
-        log_frame.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        log_frame.grid(row=6, column=0, sticky="ew", pady=(10, 0))
         log_frame.grid_columnconfigure(0, weight=1)
         self._log_frame = log_frame
-        # Idle: hide empty glass slab under the catalog.
         log_frame.grid_remove()
 
         self.log_title = ctk.CTkLabel(
@@ -676,6 +914,21 @@ class RestoreIosApp(ctk.CTk):
         except tk.TclError:
             pass
 
+    def _log_exception(self, where: str, exc: BaseException) -> None:
+        """Surface unexpected errors instead of silent pass."""
+        message = f"[ошибка] {where}: {type(exc).__name__}: {exc}"
+        try:
+            self._log(message)
+        except Exception:
+            pass
+        try:
+            path = data_dir() / "runtime_errors.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+        except OSError:
+            pass
+
     def _on_version_click(self, _event: object = None) -> None:
         self._version_click_count += 1
         if self._version_click_count < 5:
@@ -784,6 +1037,9 @@ class RestoreIosApp(ctk.CTk):
         def on_phase(phase: str, value: float, text: str) -> None:
             progress(phase, value, text)
 
+        # Never clear cancel flags if the queue already requested cancel.
+        if self._install_queue.cancel_event.is_set():
+            raise IpatoolCancelled("Операция отменена.")
         self.ipatool.clear_cancel()
         self.device_installer.clear_cancel()
         run_install_job(
@@ -793,13 +1049,18 @@ class RestoreIosApp(ctk.CTk):
             config_manager=self.config_manager,
             udid=udid,
             on_phase=on_phase,
+            cancel_event=self._install_queue.cancel_event,
         )
 
     def _refresh_queue_ui(self) -> None:
         jobs = self._install_queue.jobs
-        running = sum(1 for job in jobs if job.status == JobStatus.RUNNING)
         busy = self._install_queue.is_busy
-        self.install_button.configure(state="disabled" if busy and running else "normal")
+
+        if not busy and not any(job.status == JobStatus.RUNNING for job in jobs):
+            try:
+                self._hide_progress()
+            except Exception as exc:
+                self._log_exception("hide_progress", exc)
 
         for job in jobs:
             prev = self._queue_seen.get(job.id)
@@ -810,20 +1071,53 @@ class RestoreIosApp(ctk.CTk):
             title = job.app.maskTitle or job.app.title
             if job.status == JobStatus.DONE and prev == JobStatus.RUNNING.value:
                 self._log(f"Установлено: {title}")
+                try:
+                    self.settings.remember_install(job.app.id)
+                except Exception as exc:
+                    self._log_exception("remember_install", exc)
                 target_udid = job.udid or self._selected_udid
                 target = next((d for d in self._devices if d.udid == target_udid), None)
                 target_name = (target.name if target else None) or "iPhone"
                 self._toast(f"Установлено на {target_name}: {title}", kind="success")
-                messagebox.showinfo(
-                    "Готово",
-                    f"Приложение «{title}» установлено на {target_name} (USB).\n"
-                    "Проверьте домашний экран iPhone.",
-                )
+                self._last_installed_title = title
+                account = self.config_manager.apple_account_email or ""
+                if account:
+                    self._log(
+                        f"Подсказка: на iPhone войдите под {mask_email(account)} "
+                        f"(Медиаматериалы и покупки), иначе приложение может не открыться."
+                    )
             elif job.status == JobStatus.FAILED and prev == JobStatus.RUNNING.value:
                 self._last_failed_app = job.app
                 title_e, message = friendly_error(job.error or "Ошибка", domain="Установка")
                 self._toast(f"Ошибка: {title}", kind="error")
                 messagebox.showerror(title_e, f"«{title}»\n\n{message}")
+            elif job.status == JobStatus.CANCELLED and prev in (
+                JobStatus.RUNNING.value,
+                JobStatus.PENDING.value,
+                None,
+            ):
+                self._toast(f"Отменено: {title}", kind="info")
+                self._log(f"Отменено: {title}")
+
+        self._sync_install_card()
+
+    def _cancel_install_queue(self) -> None:
+        if not self._install_queue.is_busy:
+            return
+        self._install_queue.cancel_all()
+        self._toast("Отмена установки…", kind="info")
+        self._log("Очередь установки: отмена")
+
+    def _retry_install_queue(self) -> None:
+        count = self._install_queue.retry_failed()
+        if count:
+            self._toast(f"Повтор: {count}", kind="info")
+            self._log(f"Повтор установки: {count}")
+            return
+        if self._last_failed_app is not None:
+            self._enqueue_apps([self._last_failed_app])
+            return
+        messagebox.showinfo("Очередь", "Нет заданий для повтора.")
 
     def _remember_devices(self, devices: list[DeviceInfo]) -> None:
         self._devices = devices
@@ -979,6 +1273,31 @@ class RestoreIosApp(ctk.CTk):
         ):
             self._install_drivers()
 
+    def _install_drivers(self) -> None:
+        if apple_drivers_installed():
+            messagebox.showinfo("Драйверы", "Драйверы Apple для iPhone уже установлены.")
+            return
+
+        if not messagebox.askyesno(
+            "Драйверы Apple",
+            "Установить драйверы для подключения iPhone по USB?\n\n"
+            "Может потребоваться подтверждение администратора Windows.",
+        ):
+            return
+
+        def task() -> None:
+            try:
+                message = install_apple_drivers()
+                self.after(0, lambda m=message: self._log(m))
+                self.after(0, lambda: self._refresh_readiness())
+                self.after(0, lambda m=message: messagebox.showinfo("Драйверы", m))
+            except DriverInstallerError as exc:
+                message = str(exc)
+                self.after(0, lambda m=message: self._log(m))
+                self.after(0, lambda m=message: messagebox.showerror("Драйверы", m))
+
+        self._run_async(task)
+
     def _reset_progress(self) -> None:
         self._stop_progress_creep()
         self._progress_value = 0.0
@@ -990,6 +1309,17 @@ class RestoreIosApp(ctk.CTk):
         self.progress_label.configure(text=text)
         self._progress_value = max(self._progress_value, min(1.0, value))
         animate_progress_to(self._anim, self.progress_bar, self._progress_value)
+        # Mirror into install card (stable UX).
+        try:
+            self._install_progress_wrap.pack(fill="x", before=self._install_actions)
+            self._install_progress_bar.set(self._progress_value)
+            self._install_progress_pct.configure(text=f"{int(self._progress_value * 100)}%")
+            if self.selected_app:
+                name = self.selected_app.maskTitle or self.selected_app.title
+                self.selected_label.configure(text=f"Установка «{name}»…")
+                self.selected_meta_label.configure(text=text or "Идёт установка")
+        except Exception:
+            pass
 
     def _start_progress_creep(self, text: str, *, cap: float = 0.6, step: float = 0.003) -> None:
         self._stop_progress_creep()
@@ -1020,6 +1350,12 @@ class RestoreIosApp(ctk.CTk):
         self.progress_label.configure(text="")
         self.progress_frame.grid_remove()
         self._update_log_frame_visibility()
+        try:
+            self._install_progress_bar.set(0)
+            self._install_progress_pct.configure(text="0%")
+            self._install_progress_wrap.pack_forget()
+        except Exception:
+            pass
 
     def _progress_callback(self) -> Callable[[float, str], None]:
         def callback(value: float, text: str) -> None:
@@ -1124,27 +1460,52 @@ class RestoreIosApp(ctk.CTk):
             self._log(device_line)
 
     def _warm_icon_cache(self) -> None:
-        """Warm PIL disk/memory for bank logos and catalog icons off the critical path."""
+        """Warm PIL disk cache for Popular only — never create CTkImage off UI thread."""
 
         def task() -> None:
             try:
-                groups = self.config_manager.list_bank_groups()
-                self.icon_loader.warm_bank_groups(groups, size=44)
-                apps = self.config_manager.list_apps()
-                self.icon_loader.warm_apps(apps, size=44)
-            except Exception:
-                pass
+                apps: list[AppEntry] = []
+                groups: list[BankGroup] = []
+                for item_id in self.config_manager.popular_item_ids():
+                    if item_id.startswith("@bank:"):
+                        group = self.config_manager.get_bank_group(item_id.split(":", 1)[1])
+                        if group:
+                            groups.append(group)
+                    elif item_id.startswith("@version:"):
+                        group = self.config_manager.get_version_group(item_id.split(":", 1)[1])
+                        if group:
+                            app = self.config_manager.get_app(group.icon_app_id)
+                            if app:
+                                apps.append(app)
+                    else:
+                        app = self.config_manager.get_app(item_id)
+                        if app:
+                            apps.append(app)
+                self.icon_loader.warm_apps(apps, size=48)
+                self.icon_loader.warm_bank_groups(groups, size=48)
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._log_exception("warm_icon_cache", e))
 
         threading.Thread(target=task, daemon=True).start()
 
     def _startup_checks(self) -> None:
         def task() -> None:
             try:
-                problems = verify_bundled_tools(strict=False)
+                strict = bool(getattr(sys, "frozen", False))
+                problems = verify_bundled_tools(strict=strict)
                 if problems:
                     self.after(0, lambda p=problems: self._log("Проверка tools: " + "; ".join(p)))
-            except Exception:
-                pass
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._log_exception("verify_bundled_tools", e))
+                if getattr(sys, "frozen", False):
+                    self.after(
+                        0,
+                        lambda e=exc: messagebox.showerror(
+                            "Целостность",
+                            "Проверка встроенных инструментов не пройдена.\n"
+                            f"{e}\n\nПереустановите GROMOV Restore+.",
+                        ),
+                    )
 
             driver_line, device_line, _combined = self._collect_readiness()
             self.after(0, self._refresh_readiness)
@@ -1155,8 +1516,8 @@ class RestoreIosApp(ctk.CTk):
             try:
                 devices = self.device_installer.list_usb_devices()
                 self.after(0, lambda d=devices: self._remember_devices(d))
-            except Exception:
-                pass
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._log_exception("startup_list_usb", e))
 
             self._try_init_ipatool(show_errors=False)
             if not self.ipatool:
@@ -1179,9 +1540,173 @@ class RestoreIosApp(ctk.CTk):
 
         threading.Thread(target=task, daemon=True).start()
 
+    def _on_search_text_changed(self) -> None:
+        self._update_search_chrome()
+        self._search_debouncer.trigger()
+
+    def _update_search_chrome(self) -> None:
+        """Keep search affordance visible: icon always on; 'Поиск' label when empty."""
+        hint = getattr(self, "_search_hint", None)
+        if hint is None:
+            return
+        has_text = bool(self.bank_search_var.get().strip())
+        try:
+            if has_text:
+                hint.grid_remove()
+            else:
+                hint.grid()
+        except tk.TclError:
+            pass
+
+    def _on_search_focus(self, focused: bool) -> None:
+        wrap = getattr(self, "_search_wrap", None)
+        if wrap is None:
+            return
+        try:
+            wrap.configure(
+                border_color=THEME["accent"] if focused else THEME["glass_border"],
+                fg_color=THEME["input_focus"] if focused else THEME["input"],
+            )
+            self.bank_search_entry.configure(
+                fg_color=THEME["input_focus"] if focused else THEME["input"],
+            )
+            if getattr(self, "_search_icon", None) is not None:
+                self._search_icon.configure(
+                    text_color=THEME["accent"] if focused else THEME["text_secondary"],
+                )
+            if getattr(self, "_search_hint", None) is not None and not self.bank_search_var.get().strip():
+                self._search_hint.configure(
+                    text_color=THEME["accent"] if focused else THEME["muted"],
+                )
+        except tk.TclError:
+            pass
+
+    def _clear_app_selection(self) -> None:
+        self.selected_app = None
+        self._selected_icon_ref = None
+        self._last_installed_title = ""
+        try:
+            self.selected_icon_label.configure(image="")
+        except tk.TclError:
+            pass
+        self._sync_install_card()
+
+    def _install_another(self) -> None:
+        """Reset card to idle after successful install."""
+        self._last_failed_app = None
+        self._last_installed_title = ""
+        self._clear_app_selection()
+
+    def _sync_install_card(self) -> None:
+        """Drive install-card UI states without changing layout geometry."""
+        if not getattr(self, "install_button", None):
+            return
+
+        busy = self._async_busy or self._install_queue.is_busy or self._update_busy
+        has_failed = bool(self._last_failed_app) and not busy
+        just_done = bool(self._last_installed_title) and not busy and not has_failed
+
+        # Reset action buttons packing (fixed slots via pack order).
+        for btn in (self.install_button, self._cancel_install_btn, self._retry_install_btn):
+            try:
+                btn.pack_forget()
+            except tk.TclError:
+                pass
+
+        if busy:
+            self._install_card_state = "installing"
+            name = ""
+            if self.selected_app:
+                name = self.selected_app.maskTitle or self.selected_app.title
+            elif self._install_queue.current:
+                app = self._install_queue.current.app
+                name = app.maskTitle or app.title
+            self.selected_label.configure(text=f"Установка «{name or 'приложения'}»…")
+            phase = str(self.progress_label.cget("text") or "").strip()
+            self.selected_meta_label.configure(text=phase or "Идёт установка на iPhone")
+            try:
+                self._install_progress_wrap.pack(fill="x", before=self._install_actions)
+            except tk.TclError:
+                self._install_progress_wrap.pack(fill="x")
+            self._cancel_install_btn.pack(side="left")
+            self.install_button.configure(state="disabled")
+            return
+
+        try:
+            self._install_progress_wrap.pack_forget()
+        except tk.TclError:
+            pass
+
+        if has_failed and self._last_failed_app is not None:
+            self._install_card_state = "error"
+            app = self._last_failed_app
+            title = app.maskTitle or app.title
+            self.selected_label.configure(text=title)
+            self.selected_meta_label.configure(text="Не удалось установить — можно повторить")
+            icon = self.icon_loader.get_app_icon(app, size=48)
+            self._selected_icon_ref = icon
+            self.selected_icon_label.configure(image=icon)
+            self._retry_install_btn.pack(side="left")
+            self.install_button.configure(
+                text="Установить приложение",
+                command=self._install_selected,
+                state="disabled",
+            )
+            return
+
+        if just_done:
+            self._install_card_state = "done"
+            title = self._last_installed_title
+            self.selected_label.configure(text="✓ Установлено")
+            self.selected_meta_label.configure(text=f"«{title}» успешно установлено")
+            self.install_button.configure(
+                text="Установить другое",
+                command=self._install_another,
+                state="normal",
+            )
+            self.install_button.pack(side="left")
+            return
+
+        if self.selected_app is not None:
+            self._install_card_state = "ready"
+            app = self.selected_app
+            title = app.maskTitle or app.title
+            self.selected_label.configure(text=title)
+            self.selected_meta_label.configure(text="Готово к установке")
+            self.install_button.configure(
+                text="Установить приложение",
+                command=self._install_selected,
+                state="normal",
+            )
+            self.install_button.pack(side="left")
+            return
+
+        self._install_card_state = "idle"
+        self.selected_label.configure(text="Выберите приложение")
+        self.selected_meta_label.configure(
+            text="Чтобы начать установку, выберите приложение из каталога"
+        )
+        try:
+            self.selected_icon_label.configure(image="")
+        except tk.TclError:
+            pass
+        self.install_button.configure(
+            text="Установить приложение",
+            command=self._install_selected,
+            state="disabled",
+        )
+        self.install_button.pack(side="left")
+
+    def _update_selection_bar(self) -> None:
+        # Card is always visible — state is driven by _sync_install_card.
+        self._sync_install_card()
+
+    def _update_install_button_state(self) -> None:
+        self._sync_install_card()
+
     def _set_busy(self, busy: bool) -> None:
-        state = "disabled" if busy else "normal"
-        self.install_button.configure(state=state)
+        self._async_busy = busy
+        self._sync_install_card()
 
     def _run_async(self, task: Callable[[], None]) -> None:
         if self._worker and self._worker.is_alive():
@@ -1189,7 +1714,7 @@ class RestoreIosApp(ctk.CTk):
             return
 
         def runner() -> None:
-            self._set_busy(True)
+            self.after(0, lambda: self._set_busy(True))
             try:
                 task()
             finally:
@@ -1383,10 +1908,18 @@ class RestoreIosApp(ctk.CTk):
             ).pack(side="left")
 
     def _launch_verified_setup(self, installer: Path) -> None:
-        """Start silent Inno Setup and quit so the update can replace files."""
+        """Start silent Inno Setup after SHA256 + Authenticode checks, then quit."""
+        ok, detail = verify_setup_authenticode(installer)
+        self._log(f"Authenticode: {detail}")
+        if not ok:
+            raise UpdateCheckError(
+                "Цифровая подпись установщика не прошла проверку.\n"
+                f"{detail}\n"
+                "Обновление прервано для вашей безопасности."
+            )
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            subprocess.Popen(  # noqa: S603 — local SHA256-verified Setup.exe
+            subprocess.Popen(  # noqa: S603 — local SHA256+Authenticode verified Setup.exe
                 [str(installer), "/VERYSILENT", "/NORESTART", "/CLOSEAPPLICATIONS"],
                 close_fds=True,
                 creationflags=flags,
@@ -1703,6 +2236,7 @@ class RestoreIosApp(ctk.CTk):
                 payload = json.load(handle)
             if isinstance(payload, dict):
                 return {
+                    "tab": str(payload.get("tab", "popular")),
                     "view": str(payload.get("view", "root")),
                     "bankGroup": str(payload.get("bankGroup", "")),
                 }
@@ -1712,6 +2246,7 @@ class RestoreIosApp(ctk.CTk):
 
     def _save_catalog_state(self) -> None:
         payload = {
+            "tab": self._catalog_tab,
             "view": self._catalog_view,
             "bankGroup": self._catalog_bank_group or "",
         }
@@ -1723,25 +2258,41 @@ class RestoreIosApp(ctk.CTk):
             pass
 
     def _restore_catalog_state(self) -> None:
+        """Restore tab only — skip bank drill-down on cold start for faster first paint."""
         state = self._load_catalog_state()
-        view = state.get("view", "root")
-        bank_group = state.get("bankGroup", "")
-        if view == "bank" and bank_group and self.config_manager.get_bank_group(bank_group):
-            self._catalog_view = "bank"
-            self._catalog_bank_group = bank_group
-        elif view == "banks":
-            self._catalog_view = "banks"
-            self._catalog_bank_group = None
-        else:
-            self._catalog_view = "root"
-            self._catalog_bank_group = None
+        tab = state.get("tab", "popular")
+        if tab not in _CATALOG_TAB_TITLES:
+            tab = "popular"
+        self._catalog_tab = tab
+        self._catalog_view = "root"
+        self._catalog_bank_group = None
+
+    def _on_catalog_tab(self, label: str) -> None:
+        key = _CATALOG_TAB_KEYS.get(label, "popular")
+        if (
+            key == self._catalog_tab
+            and self._catalog_view == "root"
+            and not self._global_search_query
+        ):
+            return
+        self._catalog_tab = key
+        self._catalog_view = "root"
+        self._catalog_bank_group = None
+        self._save_catalog_state()
+        self._refresh_app_list()
 
     def _catalog_back(self) -> None:
-        if self._catalog_view == "bank":
-            self._open_banks_folder()
+        if self._catalog_view != "bank":
             return
-        if self._catalog_view == "banks":
-            self._open_root_catalog()
+        self._catalog_view = "root"
+        self._catalog_bank_group = None
+        self._catalog_tab = "banks"
+        if self._catalog_tabs is not None:
+            self._catalog_tabs.set("Банки")
+        self._bank_search_query = ""
+        self.bank_search_var.set("")
+        self._save_catalog_state()
+        self._refresh_app_list()
 
     def _open_root_catalog(self) -> None:
         self._catalog_view = "root"
@@ -1749,16 +2300,16 @@ class RestoreIosApp(ctk.CTk):
         self._bank_search_query = ""
         self.bank_search_var.set("")
         if self.selected_app and self.selected_app.is_banking:
-            self.selected_app = None
-            self.selected_label.configure(text="Выберите приложение")
-            self.selected_meta_label.configure(text="Нажмите на карточку в списке ниже")
-            self.selected_icon_label.configure(image="")
+            self._clear_app_selection()
         self._save_catalog_state()
         self._refresh_app_list()
 
     def _open_banks_folder(self) -> None:
-        self._catalog_view = "banks"
+        self._catalog_tab = "banks"
+        self._catalog_view = "root"
         self._catalog_bank_group = None
+        if self._catalog_tabs is not None:
+            self._catalog_tabs.set("Банки")
         self._bank_search_query = ""
         self.bank_search_var.set("")
         self._save_catalog_state()
@@ -1767,6 +2318,7 @@ class RestoreIosApp(ctk.CTk):
     def _open_bank_group(self, bank_group_id: str) -> None:
         if not self.config_manager.get_bank_group(bank_group_id):
             return
+        self._catalog_tab = "banks"
         self._catalog_view = "bank"
         self._catalog_bank_group = bank_group_id
         self._bank_search_query = ""
@@ -1826,43 +2378,34 @@ class RestoreIosApp(ctk.CTk):
         self._commit_search()
 
     def _update_catalog_header(self) -> None:
-        self.bank_search_entry.grid()
-        if self._catalog_view == "root":
-            self.catalog_back_button.grid_remove()
-            self.catalog_path_label.configure(text="Каталог")
+        if self._catalog_view == "bank" and self._catalog_bank_group:
+            self.catalog_back_button.grid()
+            if self._tabs_wrap is not None:
+                self._tabs_wrap.grid_remove()
+            group = self.config_manager.get_bank_group(self._catalog_bank_group)
+            bank_title = group.title if group else "Банк"
+            self.catalog_path_label.configure(text=f"Банки / {bank_title}")
             return
 
-        self.catalog_back_button.grid()
-        if self._catalog_view == "banks":
-            self.catalog_path_label.configure(text=BANKS_FOLDER_TITLE)
-            return
-
-        group = self.config_manager.get_bank_group(self._catalog_bank_group or "")
-        bank_title = group.title if group else "Банк"
-        self.catalog_path_label.configure(text=f"{BANKS_FOLDER_TITLE} / {bank_title}")
+        self.catalog_back_button.grid_remove()
+        if self._tabs_wrap is not None:
+            self._tabs_wrap.grid()
+        if self._catalog_tabs is not None:
+            label = _CATALOG_TAB_TITLES.get(self._catalog_tab, "Популярные")
+            try:
+                self._catalog_tabs.set(label)
+            except Exception:
+                pass
+        count = self.config_manager.catalog_app_count()
+        self.catalog_path_label.configure(text=f"Каталог · {count}")
 
     def _filter_bank_apps(self, apps: list[AppEntry]) -> list[AppEntry]:
         query = self._bank_search_query.strip().lower()
         if not query:
             return apps
-        filtered: list[AppEntry] = []
-        for app in apps:
-            haystack = " ".join(
-                part
-                for part in (
-                    app.title,
-                    app.maskTitle,
-                    app.description,
-                    str(app.appId),
-                )
-                if part
-            ).lower()
-            if query in haystack:
-                filtered.append(app)
-        return filtered
+        return [app for app in apps if self.config_manager.app_matches_query(app, query)]
 
     def _schedule_card_reveal(self, card: ctk.CTkFrame, index: int, token: int) -> None:
-        # Subtle border fade only — avoid painting cards with window bg (gap flash).
         if index > 12:
             return
         delay = min(index, 8) * 20
@@ -1893,142 +2436,482 @@ class RestoreIosApp(ctk.CTk):
             duration_ms=DURATION_FAST,
         )
 
+    def _catalog_host(self) -> ctk.CTkBaseClass:
+        return self._catalog_parent if self._catalog_parent is not None else self.app_list
+
+    def _catalog_panel_key(self) -> str:
+        query = self._global_search_query.strip().lower()
+        if self._catalog_view == "bank" and self._catalog_bank_group:
+            return f"bank:{self._catalog_bank_group}:{query}"
+        if query:
+            return f"search:{self._catalog_tab}:{query}"
+        return f"tab:{self._catalog_tab}"
+
+    def _hide_catalog_panels(self) -> None:
+        for frame in self._catalog_panels.values():
+            try:
+                frame.pack_forget()
+            except tk.TclError:
+                pass
+
+    def _evict_search_panels(self) -> None:
+        doomed = [key for key in self._catalog_panels if key.startswith("search:")]
+        for key in doomed:
+            frame = self._catalog_panels.pop(key, None)
+            self._catalog_panel_rows.pop(key, None)
+            if frame is not None:
+                try:
+                    frame.destroy()
+                except tk.TclError:
+                    pass
+
+    def _schedule_ui(self, callback: Callable[[], None]) -> None:
+        self.after(0, callback)
+
+    def _bind_async_app_icon(
+        self,
+        card: ctk.CTkFrame,
+        app: AppEntry,
+        *,
+        size: int = 48,
+        token: int | None = None,
+    ) -> None:
+        _ = token  # kept for call-site compatibility; card existence is the gate
+        cached = self.icon_loader.peek_app_icon(app, size)
+        if cached is not None:
+            self._icon_refs.append(cached)
+            try:
+                card.icon_label.configure(image=cached)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            return
+
+        def on_ready(photo: ctk.CTkImage) -> None:
+            self._icon_refs.append(photo)
+            try:
+                if card.winfo_exists():
+                    card.icon_label.configure(image=photo)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        self.icon_loader.schedule_app_icon(
+            app,
+            size=size,
+            on_ready=on_ready,
+            schedule=self._schedule_ui,
+        )
+
     def _refresh_app_list(self) -> None:
         self._catalog_anim_token += 1
         token = self._catalog_anim_token
         self._anim.cancel_all()
-
-        for child in self.app_list.winfo_children():
-            child.destroy()
-        self._app_rows.clear()
-        self._icon_refs.clear()
         self._update_catalog_header()
 
-        # Instant populate for Banks / bank apps — skeleton caused perceived freeze.
-        # Keep a short skeleton only on cold root load with many general apps.
-        use_skeleton = self._catalog_view == "root" and not getattr(self, "_catalog_ready", False)
-        if use_skeleton:
-            for index in range(4):
-                row, col = divmod(index, 2)
-                skeleton_card(self.app_list, row=row, col=col)
+        key = self._catalog_panel_key()
+        self._hide_catalog_panels()
 
-            def populate() -> None:
-                if token != self._catalog_anim_token:
-                    return
-                for child in self.app_list.winfo_children():
-                    child.destroy()
-                self._app_rows.clear()
-                self._populate_catalog_cards(token)
-                self._catalog_ready = True
-
-            self.after(80, populate)
+        # Reuse built tab panels (no search) — instant tab switch.
+        reusable = key in self._catalog_panels and not key.startswith("search:")
+        if reusable:
+            panel = self._catalog_panels[key]
+            panel.pack(fill="both", expand=True)
+            self._catalog_parent = panel
+            self._app_rows = dict(self._catalog_panel_rows.get(key, {}))
+            self._icon_refs = [ref for ref in self._icon_refs if ref is self._selected_icon_ref]
+            if self.selected_app and self.selected_app.id in self._app_rows:
+                self._highlight_card(self.selected_app.id)
+            self._catalog_ready = True
             return
 
+        if key.startswith("search:"):
+            self._evict_search_panels()
+
+        # Cap cached panels to avoid unbounded widget growth.
+        if len(self._catalog_panels) >= 8:
+            oldest = next(iter(self._catalog_panels))
+            old = self._catalog_panels.pop(oldest, None)
+            self._catalog_panel_rows.pop(oldest, None)
+            if old is not None:
+                try:
+                    old.destroy()
+                except tk.TclError:
+                    pass
+
+        panel = ctk.CTkFrame(self.app_list, fg_color="transparent")
+        panel.pack(fill="both", expand=True)
+        self._catalog_panels[key] = panel
+        self._catalog_parent = panel
+        self._app_rows = {}
+        # Keep selected icon; drop only catalog card refs from previous live panel.
+        self._icon_refs = [ref for ref in self._icon_refs if ref is self._selected_icon_ref]
         self._populate_catalog_cards(token)
+        self._catalog_panel_rows[key] = dict(self._app_rows)
         self._catalog_ready = True
 
     def _populate_catalog_cards(self, token: int) -> None:
-        cards: list[ctk.CTkFrame] = []
+        query = self._global_search_query.strip().lower()
 
-        if self._catalog_view == "banks":
-            counts = self.config_manager.banking_app_counts()
-            groups = [group for group in BANK_GROUPS if counts.get(group.id, 0) > 0]
-            for index, group in enumerate(groups):
-                count = counts.get(group.id, 0)
-                row, col = divmod(index, 2)
-                cards.append(self._create_bank_card(group, count, row, col))
-        elif self._catalog_view == "bank" and self._catalog_bank_group:
+        # Drill-down: one bank's apps (pack cards — never grid).
+        if self._catalog_view == "bank" and self._catalog_bank_group:
             apps = self._filter_bank_apps(
                 self.config_manager.list_banking_apps_for_group(self._catalog_bank_group)
             )
             if not apps:
-                if self._bank_search_query:
-                    empty_state(
-                        self.app_list,
-                        icon="?",
-                        title="Ничего не найдено",
-                        hint="Попробуйте другой запрос или очистите поле поиска.",
-                        action_text="Очистить поиск",
-                        action=lambda: self.bank_search_var.set(""),
-                    )
-                else:
-                    empty_state(
-                        self.app_list,
-                        icon="○",
-                        title="В этом банке пока нет приложений",
-                        hint="Загляните позже — каталог пополняется.",
-                    )
-            else:
-                self._populate_cards_incremental(apps, token)
+                empty_state(
+                    self._catalog_host(),
+                    icon="○" if not query else "?",
+                    title="Ничего не найдено" if query else "В этом банке пока нет приложений",
+                    hint="Попробуйте другой запрос." if query else "Загляните позже — каталог пополняется.",
+                    action_text="Очистить поиск" if query else "",
+                    action=(lambda: self.bank_search_var.set("")) if query else None,
+                )
                 return
+            self._render_app_cards(apps, token, badge_new=False)
+            return
+
+        if query:
+            self._populate_tab_search(query, token)
+            return
+
+        tab = self._catalog_tab
+        if tab == "popular":
+            self._populate_tab_popular(token)
+        elif tab == "new":
+            self._populate_tab_new(token)
+        elif tab == "banks":
+            self._populate_tab_banks(token)
         else:
-            query = self._global_search_query.strip().lower()
-            if query:
-                # Global search across general + banking apps.
-                matches = [
-                    app
-                    for app in self.config_manager.list_apps()
-                    if query
-                    in " ".join(
-                        [
-                            app.title,
-                            app.maskTitle,
-                            app.description,
-                            app.bundleId,
-                            str(app.appId),
-                            app.bankGroup,
-                        ]
-                    ).lower()
-                ]
-                if not matches:
-                    empty_state(
-                        self.app_list,
-                        icon="?",
-                        title="Ничего не найдено",
-                        hint="Попробуйте другое название или очистите поиск.",
-                        action_text="Очистить поиск",
-                        action=lambda: self.bank_search_var.set(""),
-                    )
-                    return
-                self._populate_cards_incremental(matches, token)
-                return
+            self._populate_tab_all(token)
 
-            items = sorted(
-                self.config_manager.list_general_apps(),
-                key=lambda item: item.title.lower(),
+    def _populate_tab_search(self, query: str, token: int) -> None:
+        """Filter active tab content by search query."""
+        tab = self._catalog_tab
+        if tab == "banks":
+            matches = [
+                app
+                for app in self.config_manager.list_banking_apps()
+                if self.config_manager.app_matches_query(app, query)
+            ]
+        elif tab == "new":
+            matches = [
+                app
+                for app in self.config_manager.list_new_apps()
+                if self.config_manager.app_matches_query(app, query)
+            ]
+        elif tab == "popular":
+            # Search within popular targets' resolved apps / all apps that match + are popular ids
+            popular_ids = set(self.config_manager.popular_item_ids())
+            matches = []
+            for app in self.config_manager.search_apps(query):
+                if app.id in popular_ids:
+                    matches.append(app)
+                    continue
+                if app.versionGroup and f"@version:{app.versionGroup}" in popular_ids:
+                    matches.append(app)
+                    continue
+                if app.bankGroup and f"@bank:{app.bankGroup}" in popular_ids:
+                    matches.append(app)
+            # Deduplicate version groups
+            seen: set[str] = set()
+            deduped: list[AppEntry] = []
+            for app in matches:
+                key = app.versionGroup or app.id
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(app)
+            matches = deduped
+        else:
+            matches = self.config_manager.search_apps(query)
+
+        if not matches:
+            empty_state(
+                self._catalog_host(),
+                icon="?",
+                title="Ничего не найдено",
+                hint="Попробуйте другое название или очистите поиск.",
+                action_text="Очистить поиск",
+                action=lambda: self.bank_search_var.set(""),
             )
-            for index, app in enumerate(items):
-                row, col = divmod(index, 2)
-                cards.append(self._create_app_card(app, row, col))
-            row, col = divmod(len(items), 2)
-            bank_count = len(self.config_manager.banking_app_counts())
-            cards.append(self._create_folder_card(BANKS_FOLDER_TITLE, row, col, bank_count))
+            return
 
-        for index, card in enumerate(cards):
-            self._schedule_card_reveal(card, index, token)
+        section_header(
+            self._catalog_host(),
+            title="Результаты поиска",
+            subtitle=f"В разделе «{_CATALOG_TAB_TITLES.get(tab, tab)}» · {len(matches)}",
+        )
+        self._render_app_cards(matches, token, badge_new=True, collapse_versions=True)
 
+    def _populate_tab_popular(self, token: int) -> None:
+        popular_ids = self.config_manager.popular_item_ids()
+        if not popular_ids:
+            empty_state(self._catalog_host(), icon="○", title="Популярные пока пусты", hint="")
+            return
+        for item_id in popular_ids:
+            if token != self._catalog_anim_token:
+                return
+            self._add_popular_list_card(item_id)
+
+    def _add_popular_list_card(self, item_id: str) -> None:
+        """Vertical list cards for popular tab (faster / clearer than horizontal chips)."""
+        if item_id.startswith("@bank:"):
+            group = self.config_manager.get_bank_group(item_id.split(":", 1)[1])
+            if not group:
+                return
+            count = self.config_manager.banking_app_counts().get(group.id, 0)
+            icon = self.icon_loader.peek_bank_group_icon(group, 48)
+            card = catalog_app_card(
+                self._catalog_host(),
+                title=group.title,
+                subtitle=f"{count} приложений банка",
+                icon=icon,
+                on_click=lambda gid=group.id: self._open_bank_group(gid),
+                icon_refs=self._icon_refs,
+            )
+            if icon is None:
+
+                def on_ready(photo: ctk.CTkImage, c=card) -> None:
+                    self._icon_refs.append(photo)
+                    try:
+                        if c.winfo_exists():
+                            c.icon_label.configure(image=photo)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+
+                self.icon_loader.schedule_bank_group_icon(
+                    group,
+                    size=48,
+                    on_ready=on_ready,
+                    schedule=self._schedule_ui,
+                )
+            return
+        if item_id.startswith("@version:"):
+            group = self.config_manager.get_version_group(item_id.split(":", 1)[1])
+            if not group:
+                return
+            icon_app = self.config_manager.get_app(group.icon_app_id)
+            icon = self.icon_loader.peek_app_icon(icon_app, 48) if icon_app else None
+            card = catalog_app_card(
+                self._catalog_host(),
+                title=group.title,
+                subtitle="Старая и новая версия",
+                icon=icon,
+                on_click=lambda g=group: self._open_version_group(g),
+                icon_refs=self._icon_refs,
+            )
+            if icon_app is not None:
+                self._bind_async_app_icon(card, icon_app, size=48)
+            return
+        app = self.config_manager.get_app(item_id)
+        if app is None:
+            return
+        icon = self.icon_loader.peek_app_icon(app, 48)
+        card = catalog_app_card(
+            self._catalog_host(),
+            title=app.display_title(),
+            subtitle=app.description or "",
+            icon=icon,
+            on_click=lambda aid=app.id: self._activate_catalog_item(aid),
+            icon_refs=self._icon_refs,
+        )
+        self._bind_async_app_icon(card, app, size=48)
+
+    def _populate_tab_new(self, token: int) -> None:
+        apps = self.config_manager.list_new_apps()
+        if not apps:
+            empty_state(
+                self._catalog_host(),
+                icon="○",
+                title="Новых приложений нет",
+                hint=f"Здесь появляются приложения за последние {self.config_manager.new_app_days()} дней.",
+            )
+            return
+        section_header(
+            self._catalog_host(),
+            title="Новые",
+            subtitle=f"За {self.config_manager.new_app_days()} дней · {len(apps)}",
+        )
+        self._render_app_cards(apps, token, badge_new=True, collapse_versions=True)
+
+    def _populate_tab_banks(self, token: int) -> None:
+        """Banks tab: all banking apps (flat), pack layout — never empty grid."""
+        apps = list(self.config_manager.list_banking_apps())
+        apps.sort(key=lambda a: ConfigManager.sort_key_ru_first(a.display_title()))
+        if not apps:
+            empty_state(
+                self._catalog_host(),
+                icon="○",
+                title="Банки пока пусты",
+                hint="Банковские приложения появятся после обновления каталога.",
+            )
+            return
+        section_header(
+            self._catalog_host(),
+            title="Банки",
+            subtitle=f"{len(apps)} приложений · А–Я, затем A–Z",
+        )
+        self._render_app_cards(apps, token, badge_new=True, collapse_versions=False)
+
+    def _populate_tab_all(self, token: int) -> None:
+        entries = self.config_manager.list_root_all_entries()
+        if not entries:
+            empty_state(self._catalog_host(), icon="○", title="Каталог пуст", hint="")
+            return
+        items: list[tuple[str, str, object]] = []
+        for entry in entries:
+            if isinstance(entry, VersionGroup):
+                items.append((entry.title, "version", entry))
+            elif isinstance(entry, AppEntry):
+                items.append((entry.display_title(), "app", entry))
+        items.sort(key=lambda item: ConfigManager.sort_key_ru_first(item[0]))
+
+        section_header(
+            self._catalog_host(),
+            title="Все приложения",
+            subtitle=f"{len(items)} · сначала А–Я, затем A–Z",
+        )
+        current_letter = ""
+        for title, kind, payload in items:
+            if token != self._catalog_anim_token:
+                return
+            letter = ConfigManager.first_letter_ru(title)
+            if letter != current_letter:
+                current_letter = letter
+                letter_header(self._catalog_host(), letter)
+            if kind == "version":
+                group = payload
+                assert isinstance(group, VersionGroup)
+                icon_app = self.config_manager.get_app(group.icon_app_id)
+                icon = self.icon_loader.peek_app_icon(icon_app, 48) if icon_app else None
+                card = catalog_app_card(
+                    self._catalog_host(),
+                    title=group.title,
+                    subtitle="Старая и новая версия",
+                    icon=icon,
+                    on_click=lambda g=group: self._open_version_group(g),
+                    icon_refs=self._icon_refs,
+                )
+                if icon_app is not None:
+                    self._bind_async_app_icon(card, icon_app, size=48, token=token)
+            else:
+                app = payload
+                assert isinstance(app, AppEntry)
+                icon = self.icon_loader.peek_app_icon(app, 48)
+                badge = "Новинка" if self.config_manager.is_new_app(app) else ""
+                subtitle = app.description or ""
+                if app.is_banking and app.maskTitle:
+                    subtitle = f"{app.title} · {app.description}".strip(" ·")
+                card = catalog_app_card(
+                    self._catalog_host(),
+                    title=app.display_title(),
+                    subtitle=subtitle,
+                    icon=icon,
+                    badge=badge,
+                    on_click=lambda a=app: self._activate_catalog_item(a.id),
+                    icon_refs=self._icon_refs,
+                )
+                self._app_rows[app.id] = card
+                self._bind_async_app_icon(card, app, size=48, token=token)
+
+    def _render_app_cards(
+        self,
+        apps: list[AppEntry],
+        token: int,
+        *,
+        badge_new: bool,
+        collapse_versions: bool = False,
+    ) -> None:
+        groups = self.config_manager.version_groups() if collapse_versions else {}
+        seen_groups: set[str] = set()
+        for app in apps:
+            if token != self._catalog_anim_token:
+                return
+            if collapse_versions and app.versionGroup:
+                if app.versionGroup in seen_groups:
+                    continue
+                seen_groups.add(app.versionGroup)
+                group = groups.get(app.versionGroup)
+                if group:
+                    icon_app = self.config_manager.get_app(group.icon_app_id) or app
+                    icon = self.icon_loader.peek_app_icon(icon_app, 48)
+                    card = catalog_app_card(
+                        self._catalog_host(),
+                        title=group.title,
+                        subtitle="Несколько версий — выберите при установке",
+                        icon=icon,
+                        badge="Новинка" if badge_new and self.config_manager.is_new_app(app) else "",
+                        on_click=lambda g=group: self._open_version_group(g),
+                        icon_refs=self._icon_refs,
+                    )
+                    self._bind_async_app_icon(card, icon_app, size=48, token=token)
+                    continue
+            icon = self.icon_loader.peek_app_icon(app, 48)
+            badge = ""
+            if badge_new and self.config_manager.is_new_app(app):
+                badge = "Новинка"
+            subtitle = app.description or ""
+            if app.is_banking and app.maskTitle:
+                subtitle = f"{app.title} · {app.description}".strip(" ·")
+            card = catalog_app_card(
+                self._catalog_host(),
+                title=app.display_title(),
+                subtitle=subtitle,
+                icon=icon,
+                badge=badge,
+                on_click=lambda a=app: self._activate_catalog_item(a.id),
+                icon_refs=self._icon_refs,
+            )
+            self._app_rows[app.id] = card
+            self._bind_async_app_icon(card, app, size=48, token=token)
         if self.selected_app and self.selected_app.id in self._app_rows:
             self._highlight_card(self.selected_app.id)
 
-    def _populate_cards_incremental(self, apps: list[AppEntry], token: int) -> None:
-        """Create app cards in batches so the UI stays responsive for large banks."""
-        batch_size = 6
-        total = len(apps)
+    def _open_version_group(self, group: VersionGroup) -> None:
+        options: list[VersionPickerOption] = []
+        for option in group.options:
+            app = self.config_manager.get_app(option.app_id)
+            if app is None:
+                continue
+            icon = self.icon_loader.get_app_icon(app, size=40)
+            options.append(
+                VersionPickerOption(
+                    label=option.label,
+                    hint=option.hint or app.description,
+                    app=app,
+                    icon=icon,
+                )
+            )
+        if not options:
+            return
+        if len(options) == 1:
+            self._select_app(options[0].app)
+            return
+        open_version_picker(
+            self,
+            title=group.title,
+            options=options,
+            on_select=self._select_app,
+            icon_refs=self._icon_refs,
+        )
 
-        def add_batch(start: int) -> None:
-            if token != self._catalog_anim_token:
+    def _activate_catalog_item(self, item_id: str) -> None:
+        if item_id.startswith("@bank:"):
+            self._open_bank_group(item_id.split(":", 1)[1])
+            return
+        if item_id.startswith("@version:"):
+            group = self.config_manager.get_version_group(item_id.split(":", 1)[1])
+            if group:
+                self._open_version_group(group)
+            return
+        app = self.config_manager.get_app(item_id)
+        if app is None:
+            return
+        if app.versionGroup:
+            group = self.config_manager.get_version_group(app.versionGroup)
+            if group:
+                self._open_version_group(group)
                 return
-            end = min(start + batch_size, total)
-            for index in range(start, end):
-                row, col = divmod(index, 2)
-                card = self._create_app_card(apps[index], row, col)
-                self._schedule_card_reveal(card, index, token)
-            if end < total:
-                self.after(1, lambda: add_batch(end))
-            elif self.selected_app and self.selected_app.id in self._app_rows:
-                self._highlight_card(self.selected_app.id)
-
-        add_batch(0)
+        self._select_app(app)
 
     def _bind_click(self, widget: tk.Misc, callback: Callable[[], None]) -> None:
         widget.bind("<Button-1>", lambda _e: callback())
@@ -2036,192 +2919,24 @@ class RestoreIosApp(ctk.CTk):
             for child in widget.winfo_children():
                 self._bind_click(child, callback)
 
-    def _create_bank_card(self, group: BankGroup, app_count: int, row: int, col: int) -> ctk.CTkFrame:
-        card = glass_frame(self.app_list)
-        card.grid(
-            row=row,
-            column=col,
-            sticky="nsew",
-            padx=(0 if col == 0 else 6, 6 if col == 0 else 0),
-            pady=6,
-        )
-        card.grid_columnconfigure(1, weight=1)
-        card_id = f"__bank_{group.id}__"
-        self._app_rows[card_id] = card
-
+    def _create_bank_card(self, group: BankGroup, app_count: int) -> ctk.CTkFrame:
         icon = self.icon_loader.get_bank_group_icon(group, size=44)
-        self._icon_refs.append(icon)
-        ctk.CTkLabel(card, text="", image=icon).grid(row=0, column=0, padx=(CARD_PADX, 12), pady=CARD_PADY)
-
-        text_wrap = ctk.CTkFrame(card, fg_color="transparent")
-        text_wrap.grid(row=0, column=1, sticky="ew", pady=CARD_PADY, padx=(0, CARD_PADX))
-
-        title_row = ctk.CTkFrame(text_wrap, fg_color="transparent")
-        title_row.pack(anchor="w", fill="x")
-
-        ctk.CTkLabel(
-            title_row,
-            text=group.title,
-            font=ui_font(15, weight="bold"),
-            anchor="w",
-            text_color=THEME["silver"],
-        ).pack(side="left")
-
-        count_label = ctk.CTkLabel(
-            title_row,
-            text=str(app_count),
-            width=28,
-            height=22,
-            corner_radius=11,
-            fg_color=THEME["glass_border"],
-            text_color=THEME["muted"],
-            font=ui_font(11, weight="bold"),
-        )
-        count_label.pack(side="left", padx=(8, 0))
-
         app_word = "приложений"
         if app_count % 10 == 1 and app_count % 100 != 11:
             app_word = "приложение"
         elif app_count % 10 in {2, 3, 4} and app_count % 100 not in {12, 13, 14}:
             app_word = "приложения"
-        ctk.CTkLabel(
-            text_wrap,
-            text=f"{app_count} {app_word}",
-            font=ui_font(12),
-            text_color=THEME["muted"],
-            anchor="w",
-        ).pack(anchor="w", pady=(2, 0))
-
-        self._bind_click(card, lambda gid=group.id: self._open_bank_group(gid))
-        self._bind_card_hover(card, card_id)
-        return card
-
-    def _create_folder_card(self, title: str, row: int, col: int, bank_count: int = 0) -> ctk.CTkFrame:
-        card = glass_frame(self.app_list)
-        card.grid(row=row, column=col, sticky="nsew", padx=(0 if col == 0 else 6, 6 if col == 0 else 0), pady=6)
-        card.grid_columnconfigure(1, weight=1)
-        self._app_rows["__banking_folder__"] = card
-
-        icon_wrap = ctk.CTkFrame(card, fg_color=THEME["accent_soft"], corner_radius=14, width=48, height=48)
-        icon_wrap.grid(row=0, column=0, padx=(CARD_PADX, 12), pady=CARD_PADY)
-        icon_wrap.grid_propagate(False)
-        ctk.CTkLabel(
-            icon_wrap,
-            text="₽",
-            font=ui_font(20, weight="bold"),
-            text_color=THEME["accent"],
-        ).place(relx=0.5, rely=0.5, anchor="center")
-
-        text_wrap = ctk.CTkFrame(card, fg_color="transparent")
-        text_wrap.grid(row=0, column=1, sticky="ew", pady=CARD_PADY, padx=(0, CARD_PADX))
-
-        title_row = ctk.CTkFrame(text_wrap, fg_color="transparent")
-        title_row.pack(anchor="w", fill="x")
-
-        ctk.CTkLabel(
-            title_row,
-            text=title,
-            font=ui_font(15, weight="bold"),
-            anchor="w",
-            text_color=THEME["silver"],
-        ).pack(side="left")
-
-        if bank_count:
-            ctk.CTkLabel(
-                title_row,
-                text=str(bank_count),
-                width=28,
-                height=22,
-                corner_radius=11,
-                fg_color=THEME["glass_border"],
-                text_color=THEME["muted"],
-                font=ui_font(11, weight="bold"),
-            ).pack(side="left", padx=(8, 0))
-
-        subtitle = f"{bank_count} банков" if bank_count else "Сбер, Т-Банк, ВТБ и другие"
-        ctk.CTkLabel(
-            text_wrap,
-            text=subtitle,
-            font=ui_font(12),
-            text_color=THEME["muted"],
-            anchor="w",
-        ).pack(anchor="w", pady=(2, 0))
-
-        self._bind_click(card, self._open_banks_folder)
-        self._bind_card_hover(card, "__banking_folder__")
-        return card
-
-    def _install_drivers(self) -> None:
-        if apple_drivers_installed():
-            messagebox.showinfo("Драйверы", "Драйверы Apple для iPhone уже установлены.")
-            return
-
-        if not messagebox.askyesno(
-            "Драйверы Apple",
-            "Установить драйверы для подключения iPhone по USB?\n\n"
-            "Может потребоваться подтверждение администратора Windows.",
-        ):
-            return
-
-        def task() -> None:
-            try:
-                message = install_apple_drivers()
-                self.after(0, lambda m=message: self._log(m))
-                self.after(0, lambda: self._refresh_readiness())
-                self.after(0, lambda m=message: messagebox.showinfo("Драйверы", m))
-            except DriverInstallerError as exc:
-                message = str(exc)
-                self.after(0, lambda m=message: self._log(m))
-                self.after(0, lambda m=message: messagebox.showerror("Драйверы", m))
-
-        self._run_async(task)
-
-    def _create_app_card(self, app: AppEntry, row: int, col: int) -> ctk.CTkFrame:
-        card = glass_frame(self.app_list)
-        card.grid(
-            row=row,
-            column=col,
-            sticky="nsew",
-            padx=(0 if col == 0 else 6, 6 if col == 0 else 0),
-            pady=6,
+        card = catalog_app_card(
+            self._catalog_host(),
+            title=group.title,
+            subtitle=f"{app_count} {app_word}",
+            icon=icon,
+            on_click=lambda gid=group.id: self._open_bank_group(gid),
+            icon_refs=self._icon_refs,
         )
-        card.grid_columnconfigure(1, weight=1)
-        self._app_rows[app.id] = card
-
-        icon = self.icon_loader.get_app_icon(app, size=44)
-        self._icon_refs.append(icon)
-        icon_label = ctk.CTkLabel(card, text="", image=icon)
-        icon_label.grid(row=0, column=0, padx=(CARD_PADX, 12), pady=CARD_PADY)
-
-        text_wrap = ctk.CTkFrame(card, fg_color="transparent")
-        text_wrap.grid(row=0, column=1, sticky="ew", pady=CARD_PADY, padx=(0, CARD_PADX))
-
-        if app.maskTitle:
-            title_line = app.maskTitle
-            subtitle = app.description or app.title
-        else:
-            title_line = app.title
-            subtitle = app.description or ""
-
-        ctk.CTkLabel(
-            text_wrap,
-            text=title_line,
-            font=ui_font(14, weight="bold"),
-            anchor="w",
-            text_color=THEME["silver"],
-        ).pack(anchor="w")
-
-        if subtitle and subtitle != title_line:
-            ctk.CTkLabel(
-                text_wrap,
-                text=subtitle,
-                font=ui_font(12),
-                text_color=THEME["muted"],
-                anchor="w",
-            ).pack(anchor="w", pady=(2, 0))
-
-        self._bind_click(card, lambda: self._select_app(app))
-        self._bind_card_hover(card, app.id)
+        card_id = f"__bank_{group.id}__"
+        self._app_rows[card_id] = card
+        self._bind_card_hover(card, card_id)
         return card
 
     def _highlight_card(self, app_id: str) -> None:
@@ -2242,18 +2957,18 @@ class RestoreIosApp(ctk.CTk):
 
     def _select_app(self, app: AppEntry) -> None:
         self.selected_app = app
-        if app.maskTitle:
-            self.selected_label.configure(text=app.maskTitle)
-            self.selected_meta_label.configure(text=app.description or app.title)
-        else:
-            self.selected_label.configure(text=app.title)
-            self.selected_meta_label.configure(text=app.description or "")
+        self._last_installed_title = ""
+        if self._last_failed_app and self._last_failed_app.id != app.id:
+            self._last_failed_app = None
 
         icon = self.icon_loader.get_app_icon(app, size=48)
-        self._icon_refs.append(icon)
+        self._selected_icon_ref = icon
+        if icon not in self._icon_refs:
+            self._icon_refs.append(icon)
         self.selected_icon_label.configure(image=icon)
 
         self._highlight_card(app.id)
+        self._sync_install_card()
         label = app.maskTitle or app.title
         self._log(f"Выбрано: {label}")
 
@@ -2396,9 +3111,6 @@ def main() -> None:
 
     if not acquire_single_instance_lock():
         try:
-            import tkinter as tk
-            from tkinter import messagebox
-
             root = tk.Tk()
             root.withdraw()
             messagebox.showwarning(
@@ -2415,4 +3127,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Windowed PyInstaller (console=False) hides stderr; excepthook + this guard persist crashes.
+    try:
+        main()
+    except BaseException as exc:  # noqa: BLE001 — must never die silently on Windows GUI
+        if isinstance(exc, (SystemExit, KeyboardInterrupt)):
+            raise
+        path = _write_startup_crash(exc)
+        _show_startup_crash_dialog(path, exc)
+        raise SystemExit(1) from exc

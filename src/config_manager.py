@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from app_paths import data_dir, install_dir, resource_dir
-from ipa_utils import bundle_id_matches, cleanup_download_artifacts, is_valid_ipa
+from ipa_utils import cleanup_download_artifacts, is_valid_ipa
 
 
 BANKING_CATEGORY = "Банковские приложения"
 BANKS_FOLDER_TITLE = "Банки"
+DEFAULT_NEW_APP_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,21 @@ BANK_GROUPS: tuple[BankGroup, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class VersionOption:
+    app_id: str
+    label: str
+    hint: str = ""
+
+
+@dataclass(frozen=True)
+class VersionGroup:
+    id: str
+    title: str
+    icon_app_id: str
+    options: tuple[VersionOption, ...]
+
+
 @dataclass
 class AppEntry:
     id: str
@@ -48,9 +65,15 @@ class AppEntry:
     bankGroup: str = ""
     released: str = ""
     removed: str = ""
+    addedAt: str = ""
+    versionGroup: str = ""
+    catalogStandalone: bool = False
+    aliases: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppEntry":
+        raw_aliases = data.get("aliases") or []
+        aliases = [str(item).strip() for item in raw_aliases if str(item).strip()] if isinstance(raw_aliases, list) else []
         return cls(
             id=str(data["id"]),
             title=str(data["title"]),
@@ -64,10 +87,22 @@ class AppEntry:
             bankGroup=str(data.get("bankGroup", "")),
             released=str(data.get("released", "")),
             removed=str(data.get("removed", "")),
+            addedAt=str(data.get("addedAt", "")),
+            versionGroup=str(data.get("versionGroup", "")),
+            catalogStandalone=bool(data.get("catalogStandalone", False)),
+            aliases=aliases,
         )
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        payload = asdict(self)
+        if not payload.get("aliases"):
+            payload.pop("aliases", None)
+        if not payload.get("catalogStandalone"):
+            payload.pop("catalogStandalone", None)
+        for key in ("addedAt", "versionGroup", "released", "removed", "maskTitle", "bankGroup", "category"):
+            if not payload.get(key):
+                payload.pop(key, None)
+        return payload
 
     @property
     def is_banking(self) -> bool:
@@ -78,18 +113,27 @@ class AppEntry:
             return self.maskTitle
         return f"ID {self.appId}"
 
+    def display_title(self) -> str:
+        return self.maskTitle or self.title
+
+    def freshness_date(self) -> str:
+        return self.addedAt or self.released or ""
+
 
 class ConfigManager:
     def __init__(self) -> None:
         self.base_dir = install_dir()
         self.default_apps_path = resource_dir() / "config" / "apps.json"
         self.banking_apps_path = resource_dir() / "config" / "banking_apps.json"
+        self.catalog_config_path = resource_dir() / "config" / "catalog.json"
         self.user_apps_path = data_dir() / "user_apps.json"
         self.cache_dir = data_dir()
         self.downloads_root = self.cache_dir / "downloads"
         self._apple_account_email: str | None = None
         self._apps_cache: list[AppEntry] | None = None
-        self._apps_cache_key: tuple[float, float, float] | None = None
+        self._apps_cache_key: tuple[float, float, float, float] | None = None
+        self._catalog_cfg_cache: dict | None = None
+        self._catalog_cfg_mtime: float = 0.0
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.downloads_root.mkdir(parents=True, exist_ok=True)
         self._ensure_user_config()
@@ -98,8 +142,10 @@ class ConfigManager:
     def invalidate_apps_cache(self) -> None:
         self._apps_cache = None
         self._apps_cache_key = None
+        self._catalog_cfg_cache = None
+        self._catalog_cfg_mtime = 0.0
 
-    def _apps_source_key(self) -> tuple[float, float, float]:
+    def _apps_source_key(self) -> tuple[float, float, float, float]:
         def mtime(path: Path) -> float:
             try:
                 return path.stat().st_mtime
@@ -110,6 +156,7 @@ class ConfigManager:
             mtime(self.default_apps_path),
             mtime(self.banking_apps_path),
             mtime(self.user_apps_path),
+            mtime(self.catalog_config_path),
         )
 
     @property
@@ -186,6 +233,10 @@ class ConfigManager:
                     bankGroup=app.bankGroup,
                     released=app.released,
                     removed=app.removed,
+                    addedAt=app.addedAt,
+                    versionGroup=app.versionGroup,
+                    catalogStandalone=app.catalogStandalone,
+                    aliases=list(app.aliases),
                 )
                 changed = True
         if changed:
@@ -197,9 +248,22 @@ class ConfigManager:
             shutil.copy(self.default_apps_path, self.user_apps_path)
 
     def _read_apps_file(self, path: Path) -> list[AppEntry]:
-        with path.open(encoding="utf-8") as handle:
-            payload = json.load(handle)
-        return [AppEntry.from_dict(item) for item in payload.get("apps", [])]
+        try:
+            with path.open(encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            # Corrupt user/bundled JSON must not crash cold start.
+            print(f"[config] failed to read {path.name}: {exc}", flush=True)
+            return []
+        if not isinstance(payload, dict):
+            return []
+        apps: list[AppEntry] = []
+        for item in payload.get("apps", []) or []:
+            try:
+                apps.append(AppEntry.from_dict(item))
+            except (TypeError, ValueError, KeyError) as exc:
+                print(f"[config] skip bad app entry in {path.name}: {exc}", flush=True)
+        return apps
 
     def _write_apps_file(self, path: Path, apps: list[AppEntry]) -> None:
         payload = {"version": 1, "apps": [app.to_dict() for app in apps]}
@@ -209,16 +273,125 @@ class ConfigManager:
     def _read_banking_apps(self) -> list[AppEntry]:
         if not self.banking_apps_path.exists():
             return []
-        with self.banking_apps_path.open(encoding="utf-8") as handle:
-            payload = json.load(handle)
+        try:
+            with self.banking_apps_path.open(encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            print(f"[config] failed to read banking_apps.json: {exc}", flush=True)
+            return []
+        if not isinstance(payload, dict):
+            return []
         category = str(payload.get("category") or BANKING_CATEGORY)
         apps: list[AppEntry] = []
-        for item in payload.get("apps", []):
-            entry = AppEntry.from_dict(item)
+        for item in payload.get("apps", []) or []:
+            try:
+                entry = AppEntry.from_dict(item)
+            except (TypeError, ValueError, KeyError) as exc:
+                print(f"[config] skip bad banking entry: {exc}", flush=True)
+                continue
             if not entry.category:
                 entry.category = category
             apps.append(entry)
         return apps
+
+    def _load_catalog_config(self) -> dict:
+        mtime = 0.0
+        try:
+            mtime = self.catalog_config_path.stat().st_mtime
+        except OSError:
+            return {}
+        if self._catalog_cfg_cache is not None and self._catalog_cfg_mtime == mtime:
+            return self._catalog_cfg_cache
+        try:
+            with self.catalog_config_path.open(encoding="utf-8") as handle:
+                payload = json.load(handle)
+            cfg = payload if isinstance(payload, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            cfg = {}
+        self._catalog_cfg_cache = cfg
+        self._catalog_cfg_mtime = mtime
+        return cfg
+
+    def new_app_days(self) -> int:
+        cfg = self._load_catalog_config()
+        try:
+            days = int(cfg.get("newDays", DEFAULT_NEW_APP_DAYS))
+        except (TypeError, ValueError):
+            days = DEFAULT_NEW_APP_DAYS
+        return max(1, days)
+
+    def popular_item_ids(self) -> list[str]:
+        cfg = self._load_catalog_config()
+        raw = cfg.get("popular") or []
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    def recommended_item_ids(self) -> list[str]:
+        cfg = self._load_catalog_config()
+        raw = cfg.get("recommended") or []
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    def search_alias_map(self) -> dict[str, tuple[str, ...]]:
+        cfg = self._load_catalog_config()
+        raw = cfg.get("searchAliases") or {}
+        if not isinstance(raw, dict):
+            return {}
+        result: dict[str, tuple[str, ...]] = {}
+        for key, values in raw.items():
+            if not isinstance(values, list):
+                continue
+            cleaned = tuple(str(item).strip().lower() for item in values if str(item).strip())
+            if cleaned:
+                result[str(key).strip().lower()] = cleaned
+        return result
+
+    def version_groups(self) -> dict[str, VersionGroup]:
+        cfg = self._load_catalog_config()
+        raw = cfg.get("versionGroups") or {}
+        if not isinstance(raw, dict):
+            return {}
+        groups: dict[str, VersionGroup] = {}
+        for group_id, data in raw.items():
+            if not isinstance(data, dict):
+                continue
+            options_raw = data.get("options") or []
+            options: list[VersionOption] = []
+            if isinstance(options_raw, list):
+                for item in options_raw:
+                    if not isinstance(item, dict):
+                        continue
+                    app_id = str(item.get("appId") or "").strip()
+                    label = str(item.get("label") or "").strip()
+                    if not app_id or not label:
+                        continue
+                    options.append(
+                        VersionOption(
+                            app_id=app_id,
+                            label=label,
+                            hint=str(item.get("hint") or "").strip(),
+                        )
+                    )
+            if not options:
+                continue
+            groups[str(group_id)] = VersionGroup(
+                id=str(group_id),
+                title=str(data.get("title") or group_id),
+                icon_app_id=str(data.get("iconAppId") or options[0].app_id),
+                options=tuple(options),
+            )
+        return groups
+
+    def get_version_group(self, group_id: str) -> VersionGroup | None:
+        return self.version_groups().get(group_id)
+
+    def get_app(self, app_id: str) -> AppEntry | None:
+        for app in self.list_apps():
+            if app.id == app_id:
+                return app
+        return None
 
     def list_general_apps(self) -> list[AppEntry]:
         return [app for app in self.list_apps() if not app.is_banking]
@@ -249,6 +422,14 @@ class ConfigManager:
         apps = [app for app in self.list_apps() if app.is_banking and app.bankGroup == bank_group]
         return ConfigManager.sort_banking_apps(apps)
 
+    def list_standalone_catalog_apps(self) -> list[AppEntry]:
+        """Banking apps that also appear as their own root-catalog cards."""
+        return [
+            app
+            for app in self.list_apps()
+            if app.is_banking and app.catalogStandalone and not app.versionGroup
+        ]
+
     def list_apps(self) -> list[AppEntry]:
         key = self._apps_source_key()
         if self._apps_cache is not None and self._apps_cache_key == key:
@@ -275,6 +456,10 @@ class ConfigManager:
                     bankGroup=app.bankGroup or base.bankGroup,
                     released=app.released or base.released,
                     removed=app.removed or base.removed,
+                    addedAt=app.addedAt or base.addedAt,
+                    versionGroup=app.versionGroup or base.versionGroup,
+                    catalogStandalone=app.catalogStandalone or base.catalogStandalone,
+                    aliases=list(app.aliases or base.aliases),
                 )
             else:
                 merged[app.id] = app
@@ -282,6 +467,161 @@ class ConfigManager:
         self._apps_cache = apps
         self._apps_cache_key = key
         return list(apps)
+
+    def catalog_app_count(self) -> int:
+        """Count of catalog targets for the header (matches «Все» listing style)."""
+        return len(self.list_root_all_entries())
+
+    @staticmethod
+    def _parse_iso_date(value: str) -> date | None:
+        text = (value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.strptime(text[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+    def is_new_app(self, app: AppEntry, *, today: date | None = None) -> bool:
+        stamp = self._parse_iso_date(app.freshness_date())
+        if stamp is None:
+            return False
+        ref = today or date.today()
+        return stamp >= ref - timedelta(days=self.new_app_days())
+
+    def list_new_apps(self) -> list[AppEntry]:
+        """New installable entries for the «Новые» section (dedupe version groups)."""
+        groups = self.version_groups()
+        seen_groups: set[str] = set()
+        result: list[AppEntry] = []
+        sort_dates: dict[str, str] = {}
+        for app in self.list_apps():
+            if not self.is_new_app(app):
+                continue
+            if app.versionGroup:
+                if app.versionGroup in seen_groups:
+                    continue
+                seen_groups.add(app.versionGroup)
+                group = groups.get(app.versionGroup)
+                # Prefer the newest member inside the group as the card representative.
+                members = [a for a in self.list_apps() if a.versionGroup == app.versionGroup]
+                members.sort(key=lambda item: item.freshness_date(), reverse=True)
+                representative = members[0] if members else app
+                if group:
+                    icon_app = self.get_app(group.icon_app_id)
+                    # Keep classic icon when available, but track newest date for sorting.
+                    result.append(icon_app or representative)
+                    sort_dates[(icon_app or representative).id] = representative.freshness_date()
+                else:
+                    result.append(representative)
+                    sort_dates[representative.id] = representative.freshness_date()
+                continue
+            if app.is_banking and not app.catalogStandalone:
+                continue
+            result.append(app)
+            sort_dates[app.id] = app.freshness_date()
+        result.sort(key=lambda item: sort_dates.get(item.id, item.freshness_date()), reverse=True)
+        return result
+
+    def _expand_search_terms(self, query: str) -> set[str]:
+        q = query.strip().lower()
+        terms = {q}
+        if not q:
+            return terms
+        aliases = self.search_alias_map()
+        if q in aliases:
+            terms.update(aliases[q])
+        for key, values in aliases.items():
+            if q == key or q in values or any(q in value for value in values) or q in key:
+                terms.add(key)
+                terms.update(values)
+        return {term for term in terms if term}
+
+    def app_matches_query(self, app: AppEntry, query: str) -> bool:
+        terms = self._expand_search_terms(query)
+        if not terms:
+            return True
+        haystack = " ".join(
+            part
+            for part in (
+                app.title,
+                app.maskTitle,
+                app.description,
+                app.bundleId,
+                str(app.appId),
+                app.bankGroup,
+                " ".join(app.aliases),
+            )
+            if part
+        ).lower()
+        return any(term in haystack for term in terms)
+
+    def search_apps(self, query: str) -> list[AppEntry]:
+        q = query.strip().lower()
+        if not q:
+            return []
+        return [app for app in self.list_apps() if self.app_matches_query(app, q)]
+
+    def list_root_all_entries(self) -> list[AppEntry | VersionGroup]:
+        """All installable catalog targets for «Все приложения».
+
+        Includes general apps, version groups (collapsed), and every banking app/mask.
+        Does not include the Banks folder sentinel — banks are a separate root section.
+        """
+        groups = self.version_groups()
+        seen_groups: set[str] = set()
+        entries: list[AppEntry | VersionGroup] = []
+
+        for app in self.list_apps():
+            if app.versionGroup:
+                if app.versionGroup in seen_groups:
+                    continue
+                seen_groups.add(app.versionGroup)
+                group = groups.get(app.versionGroup)
+                if group:
+                    entries.append(group)
+                else:
+                    entries.append(app)
+            else:
+                entries.append(app)
+
+        return entries
+
+    @staticmethod
+    def sort_key_ru_first(title: str) -> tuple[int, str]:
+        """Sort Russian А–Я first, then Latin A–Z, then other."""
+        text = (title or "").strip()
+        if not text:
+            return (3, "")
+        ch = text[0].upper()
+        if ch == "Ё":
+            ch = "Е"
+        folded = text.casefold()
+        if "А" <= ch <= "Я":
+            return (0, folded)
+        if "A" <= ch <= "Z":
+            return (1, folded)
+        if ch.isdigit():
+            return (2, folded)
+        return (3, folded)
+
+    @staticmethod
+    def sort_title_ru(title: str) -> tuple[int, str]:
+        return ConfigManager.sort_key_ru_first(title)
+
+    @staticmethod
+    def first_letter_ru(title: str) -> str:
+        text = (title or "").strip()
+        if not text:
+            return "#"
+        ch = text[0].upper()
+        if "А" <= ch <= "Я" or ch == "Ё":
+            return "Е" if ch == "Ё" else ch
+        if "A" <= ch <= "Z":
+            return ch
+        if ch.isdigit():
+            return "0-9"
+        return "#"
 
     @staticmethod
     def sort_banking_apps(apps: list[AppEntry]) -> list[AppEntry]:
@@ -297,7 +637,7 @@ class ConfigManager:
     def sort_apps(apps: list[AppEntry]) -> list[AppEntry]:
         general = sorted(
             [app for app in apps if not app.is_banking],
-            key=lambda item: item.title.lower(),
+            key=lambda item: ConfigManager.sort_key_ru_first(item.display_title()),
         )
         return general + ConfigManager.sort_banking_apps(
             [app for app in apps if app.is_banking]

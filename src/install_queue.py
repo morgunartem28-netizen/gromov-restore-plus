@@ -1,4 +1,4 @@
-"""Sequential install queue with pause / cancel / retry."""
+"""Sequential install queue with cancel and retry."""
 from __future__ import annotations
 
 import threading
@@ -51,9 +51,9 @@ class InstallQueue:
         self._on_changed = on_changed
         self._on_cancel_request = on_cancel_request
         self._thread: threading.Thread | None = None
-        self._pause = threading.Event()
         self._stop = threading.Event()
         self._current: InstallJob | None = None
+        self.progress_hook: ProgressCb | None = None
 
     def _notify(self) -> None:
         if self._on_changed:
@@ -66,11 +66,17 @@ class InstallQueue:
 
     @property
     def current(self) -> InstallJob | None:
-        return self._current
+        with self._lock:
+            return self._current
 
     @property
     def is_busy(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
+
+    @property
+    def cancel_event(self) -> threading.Event:
+        """Shared cancel flag for the active install pipeline."""
+        return self._stop
 
     def enqueue(self, apps: list, *, udid: str | None = None) -> int:
         added = 0
@@ -93,24 +99,13 @@ class InstallQueue:
 
     def start(self) -> None:
         self._stop.clear()
-        self._pause.clear()
         if self.is_busy:
             return
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
-    def pause(self) -> None:
-        self._pause.set()
-        self._notify()
-
-    def resume(self) -> None:
-        self._pause.clear()
-        self.start()
-        self._notify()
-
     def cancel_all(self) -> None:
         self._stop.set()
-        self._pause.clear()
         if self._on_cancel_request:
             self._on_cancel_request()
         with self._lock:
@@ -136,57 +131,59 @@ class InstallQueue:
     def clear_finished(self) -> None:
         with self._lock:
             self._jobs = [
-                job for job in self._jobs if job.status not in (JobStatus.DONE, JobStatus.CANCELLED)
+                job
+                for job in self._jobs
+                if job.status not in (JobStatus.DONE, JobStatus.CANCELLED, JobStatus.FAILED)
             ]
         self._notify()
 
     def _run_loop(self) -> None:
         while not self._stop.is_set():
-            while self._pause.is_set() and not self._stop.is_set():
-                time.sleep(0.15)
-
             job: InstallJob | None = None
             with self._lock:
                 for item in self._jobs:
                     if item.status == JobStatus.PENDING:
                         job = item
                         item.status = JobStatus.RUNNING
+                        self._current = job
                         break
             if job is None:
                 break
 
-            self._current = job
             self._notify()
 
             def progress(phase: str, value: float, text: str) -> None:
-                _ = (phase, value, text)
-                # UI listens via external progress hook set by app.
-                hook = getattr(self, "progress_hook", None)
+                hook = self.progress_hook
                 if callable(hook):
                     hook(phase, value, text)
 
             try:
                 if self._stop.is_set():
-                    job.status = JobStatus.CANCELLED
-                    job.error = "Отменено"
-                else:
-                    self._worker(job, progress)
-                    if self._stop.is_set():
+                    with self._lock:
                         job.status = JobStatus.CANCELLED
                         job.error = "Отменено"
-                    elif job.status == JobStatus.RUNNING:
-                        job.status = JobStatus.DONE
+                else:
+                    self._worker(job, progress)
+                    with self._lock:
+                        if self._stop.is_set():
+                            job.status = JobStatus.CANCELLED
+                            job.error = "Отменено"
+                        elif job.status == JobStatus.RUNNING:
+                            job.status = JobStatus.DONE
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
-                if self._stop.is_set() or "отмен" in msg.lower() or "cancel" in msg.lower():
-                    job.status = JobStatus.CANCELLED
-                    job.error = "Отменено"
-                else:
-                    job.status = JobStatus.FAILED
-                    job.error = msg
+                with self._lock:
+                    if self._stop.is_set() or "отмен" in msg.lower() or "cancel" in msg.lower():
+                        job.status = JobStatus.CANCELLED
+                        job.error = "Отменено"
+                    else:
+                        job.status = JobStatus.FAILED
+                        job.error = msg
 
-            self._current = None
+            with self._lock:
+                self._current = None
             self._notify()
 
-        self._current = None
+        with self._lock:
+            self._current = None
         self._notify()

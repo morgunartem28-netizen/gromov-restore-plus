@@ -67,8 +67,12 @@ def run_install_job(
         poller = threading.Thread(target=poll, daemon=True)
         poller.start()
         try:
-            ipatool.clear_cancel()
-            device_installer.clear_cancel()
+            # Do not clear cancel flags if the queue already requested cancel.
+            if cancel_event is not None and cancel_event.is_set():
+                raise IpatoolCancelled("Операция отменена.")
+            if cancel_event is None or not cancel_event.is_set():
+                ipatool.clear_cancel()
+                device_installer.clear_cancel()
             ipa_path = ipatool.download(
                 app_id=app.appId,
                 bundle_id=app.bundleId,

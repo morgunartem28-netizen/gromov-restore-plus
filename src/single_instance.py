@@ -100,8 +100,9 @@ def acquire_single_instance_lock() -> bool:
                 return True
             return False
         except OSError:
-            # Fail closed: do not allow a second instance if locking is broken.
-            return False
+            # Fail open: AV/permission glitches on app.lock must not block launch.
+            # Worst case is a second instance, not a silent "won't start".
+            return True
 
     if lock_path.exists():
         stale_pid = _read_lock_pid(lock_path)

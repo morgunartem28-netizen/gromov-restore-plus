@@ -209,7 +209,7 @@ if ($iscc) {
                 "https://ghfast.top/$setupUrl"
             )
             sha256     = $sha
-            notes      = "Вышло новое обновление! 🎉 Большие баги победили, средние напугали, а маленькие пока успешно скрываются."
+            notes      = "Провели улучшение дизайна, изменили каталог и добавили 3 новых приложения!"
         }
         $manifestPath = Join-Path $root "release\version.json"
         $json = ($manifest | ConvertTo-Json -Depth 5)

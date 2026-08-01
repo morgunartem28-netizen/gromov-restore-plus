@@ -9,6 +9,7 @@
 1. Установите **GROMOV-RestorePlus-Setup.exe** из папки `dist`
 2. При установке отметьте «Установить драйверы Apple»
 3. Запустите программу → войдите в Apple ID → подключите iPhone → выберите приложение
+4. После установки на iPhone войдите в App Store под **тем же Apple ID** и при запросе введите пароль (лицензия FairPlay)
 
 Данные хранятся в `%LOCALAPPDATA%\GROMOV\RestorePlus`
 

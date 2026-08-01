@@ -57,6 +57,18 @@
       "iconFile": "sber-uchet-online.png"
     },
     {
+      "id": "sber-kids",
+      "title": "СберKids",
+      "bankGroup": "sber",
+      "bundleId": "",
+      "appId": 6784657360,
+      "description": "СберKids — отдельное приложение экосистемы Сбера",
+      "iconFile": "sber-kids.png",
+      "catalogStandalone": true,
+      "addedAt": "2026-08-01",
+      "aliases": ["сберкидс", "sberkids", "kids", "дети"]
+    },
+    {
       "id": "tbank-toastmas",
       "title": "Т-Банк",
       "bankGroup": "tbank",
@@ -120,6 +132,18 @@
       "maskTitle": "А-Ключ",
       "description": "Альфа-Банк",
       "iconFile": "alfa-a-klyuch.png"
+    },
+    {
+      "id": "alfa-investments",
+      "title": "Альфа Инвестиции",
+      "bankGroup": "alfa",
+      "bundleId": "com.checkinvest.app",
+      "appId": 6760697957,
+      "description": "Альфа Инвестиции",
+      "iconFile": "alfa-investments.png",
+      "catalogStandalone": true,
+      "addedAt": "2026-08-01",
+      "aliases": ["инвестиции", "checkinvest", "check invest", "альфа инвестиции"]
     },
     {
       "id": "sovcom-skb",

@@ -120,6 +120,8 @@ def is_trusted_update_url(url: str) -> bool:
 
     Third-party GitHub proxies are allowed only when they wrap a trusted
     ``github.com`` / ``raw.githubusercontent.com`` URL for this repository.
+    Proxies may be used for Setup.exe downloads after SHA256 is known — never
+    for unsigned trust of a new hash (see ``is_trusted_manifest_url``).
     """
     text = (url or "").strip()
     lower = text.lower()
@@ -153,6 +155,105 @@ def is_trusted_update_url(url: str) -> bool:
         "https://release-assets.githubusercontent.com/",
     )
     return any(inner_lower.startswith(prefix) for prefix in trusted_inner_prefixes)
+
+
+def is_github_proxy_url(url: str) -> bool:
+    lower = (url or "").strip().lower()
+    return any(lower.startswith(prefix) for prefix in _GITHUB_PROXY_PREFIXES)
+
+
+def is_trusted_manifest_url(url: str) -> bool:
+    """Manifest (version.json) must come from first-party hosts — never proxies.
+
+    A compromised proxy that serves both version.json and Setup.exe could pair
+    a fake version with a matching malware hash. Hash alone cannot stop that.
+    """
+    if not is_trusted_update_url(url):
+        return False
+    return not is_github_proxy_url(url)
+
+
+# Publisher subject fragments accepted for signed Setup.exe (case-insensitive).
+_SETUP_PUBLISHER_HINTS = (
+    "signpath",
+    "gromov",
+    "restore+",
+    "restore plus",
+)
+
+
+def verify_setup_authenticode(path: Path) -> tuple[bool, str]:
+    """Verify Authenticode on Setup.exe. Returns (ok, detail).
+
+    Rejects unsigned / hash-mismatched files. Accepts Valid signatures, or
+    NotTrusted/UnknownError when the signer subject matches known publisher
+    hints (self-signed SignPath builds used in the field).
+    """
+    if sys.platform != "win32":
+        return True, "Authenticode skipped (not Windows)"
+    if not path.is_file():
+        return False, "Файл установщика не найден"
+
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    # Embed path in the script — do not rely on $args with -Command.
+    escaped = str(path).replace("'", "''")
+    script = (
+        f"$s = Get-AuthenticodeSignature -LiteralPath '{escaped}'; "
+        "Write-Output ([string]$s.Status); "
+        "if ($s.SignerCertificate) { Write-Output ([string]$s.SignerCertificate.Subject) } "
+        "else { Write-Output '' }; "
+        "Write-Output ([string]$s.StatusMessage)"
+    )
+    try:
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45,
+            creationflags=flags,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"Не удалось проверить подпись: {exc}"
+
+    lines = [line.strip() for line in (completed.stdout or "").splitlines() if line.strip()]
+    status = (lines[0] if lines else "").strip()
+    subject = (lines[1] if len(lines) > 1 else "").strip()
+    detail = (lines[2] if len(lines) > 2 else "").strip()
+
+    if completed.returncode != 0 and not status:
+        err = (completed.stderr or "").strip() or detail or "ошибка PowerShell"
+        return False, f"Проверка подписи не удалась: {err}"
+
+    status_l = status.lower()
+    if status_l in {"notsigned", "hashmismatch"}:
+        return False, f"Установщик не подписан или подпись повреждена ({status})"
+
+    if status_l == "valid":
+        return True, f"Authenticode Valid · {subject or 'signed'}"
+
+    # Self-signed / untrusted root: require recognisable publisher subject.
+    subject_l = subject.lower()
+    if any(hint in subject_l for hint in _SETUP_PUBLISHER_HINTS):
+        return True, f"Authenticode {status} · publisher OK · {subject}"
+
+    if status_l in {"nottrusted", "unknownerror"} and subject:
+        return False, (
+            f"Подпись есть, но издатель не распознан ({status}).\n"
+            f"Subject: {subject}"
+        )
+
+    return False, f"Подпись установщика отклонена ({status or 'unknown'})"
 
 
 def github_release_proxy_prefixes() -> tuple[str, ...]:

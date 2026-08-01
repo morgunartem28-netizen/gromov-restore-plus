@@ -35,17 +35,13 @@ $SetupName = "GROMOV-RestorePlus-Setup.exe"
 $RawManifest = "https://raw.githubusercontent.com/$Repo/main/release/version.json"
 $ApiManifest = "https://api.github.com/repos/$Repo/contents/release/version.json?ref=main"
 
-# Prefer Contents API (uncached) first. raw.githubusercontent.com / github.com/raw
-# can return a stale HTTP 200 with a wrong sha256 for hours after main moves
-# (observed on 1.2.7 after the Setup asset was replaced). jsDelivr next; raw last.
+# Prefer Contents API (uncached) first. Never use third-party proxies for
+# version.json — a compromised proxy could pair a fake version with malware hash.
+# jsDelivr / GitHub raw are first-party CDN paths for this repo.
 $ManifestCandidates = @(
     $ManifestUrl
     $ApiManifest
     "https://cdn.jsdelivr.net/gh/$Repo@main/release/version.json"
-    "https://gh-proxy.com/$RawManifest"
-    "https://edgeone.gh-proxy.com/$RawManifest"
-    "https://ghproxy.net/$RawManifest"
-    "https://ghfast.top/$RawManifest"
     "https://github.com/$Repo/raw/main/release/version.json"
     $RawManifest
 ) | Where-Object { $_ -and $_.Trim() } | Select-Object -Unique

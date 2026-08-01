@@ -3,8 +3,6 @@
   "manifest_urls": [
     "https://cdn.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus@main/release/version.json",
     "https://raw.githubusercontent.com/morgunartem28-netizen/gromov-restore-plus/main/release/version.json",
-    "https://github.com/morgunartem28-netizen/gromov-restore-plus/raw/main/release/version.json",
-    "https://gh-proxy.com/https://raw.githubusercontent.com/morgunartem28-netizen/gromov-restore-plus/main/release/version.json",
-    "https://edgeone.gh-proxy.com/https://raw.githubusercontent.com/morgunartem28-netizen/gromov-restore-plus/main/release/version.json"
+    "https://github.com/morgunartem28-netizen/gromov-restore-plus/raw/main/release/version.json"
   ]
 }

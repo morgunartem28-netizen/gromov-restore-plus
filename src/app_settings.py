@@ -71,6 +71,21 @@ class AppSettings:
         self.save()
 
     @property
+    def recent_installs(self) -> list[str]:
+        raw = self._data.get("recent_installs") or []
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()][:8]
+
+    def remember_install(self, app_id: str) -> None:
+        aid = app_id.strip()
+        if not aid:
+            return
+        items = [aid] + [item for item in self.recent_installs if item != aid]
+        self._data["recent_installs"] = items[:8]
+        self.save()
+
+    @property
     def theme_mode(self) -> str:
         """Always dark — light theme removed; stored value ignored."""
         return "dark"

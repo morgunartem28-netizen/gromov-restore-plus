@@ -1,3 +1,3 @@
-﻿"""Версия приложения — обновляйте при каждом релизе (и в build/installer.iss)."""
+﻿"""App version - bump on each release (and in build/installer.iss)."""
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
