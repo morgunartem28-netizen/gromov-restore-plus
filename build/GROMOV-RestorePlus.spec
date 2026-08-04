@@ -13,6 +13,17 @@ certifi_pem = certifi.where()
 
 sys.path.insert(0, src_dir)
 
+# Explicitly collect every src module used at runtime.
+# Critical: `version` is imported by help_dialog / update_checker / main —
+# previous 1.4.1 frozen build crashed with ModuleNotFoundError: version.
+_src_hiddenimports = sorted(
+    {
+        os.path.splitext(name)[0]
+        for name in os.listdir(src_dir)
+        if name.endswith(".py") and name != "__init__.py"
+    }
+)
+
 a = Analysis(
     [os.path.join(src_dir, "main.py")],
     pathex=[src_dir],
@@ -23,7 +34,7 @@ a = Analysis(
         (os.path.join(project_root, "assets"), "assets"),
         (certifi_pem, "certifi"),
     ],
-    hiddenimports=["PIL._tkinter_finder", "certifi"],
+    hiddenimports=["PIL._tkinter_finder", "certifi", *_src_hiddenimports],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

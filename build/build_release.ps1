@@ -173,6 +173,75 @@ if (-not (Test-Path $dist)) {
 Copy-ToolsAndDriversToDist -DistRoot $dist -ToolsRoot $tools -DriversRoot $drivers
 Assert-DistBeforeInno -DistRoot $dist
 
+# Gate: frozen package must contain the `version` module (1.4.1 crash root cause).
+function Assert-FrozenVersionModule {
+    param([string]$DistRoot)
+    $exe = Join-Path $DistRoot "GROMOV-RestorePlus.exe"
+    if (-not (Test-Path $exe)) {
+        throw "Smoke gate failed: exe missing at $exe"
+    }
+
+    # PYZ lives inside the onedir EXE PKG (not as a loose PYZ-00.pyz file).
+    $py = Join-Path $root ".venv\Scripts\python.exe"
+    $probe = @'
+from PyInstaller.archive.readers import CArchiveReader, ZlibArchiveReader
+import os, sys, tempfile
+exe = sys.argv[1]
+r = CArchiveReader(exe)
+blob = r.extract("PYZ.pyz")
+tmpdir = tempfile.mkdtemp()
+pyz_path = os.path.join(tmpdir, "PYZ.pyz")
+with open(pyz_path, "wb") as f:
+    f.write(blob)
+z = ZlibArchiveReader(pyz_path)
+keys = set(z.toc.keys()) if isinstance(z.toc, dict) else {x[0] for x in z.toc}
+need = {"version", "help_dialog", "update_checker", "tool_integrity"}
+missing = sorted(need - keys)
+if missing:
+    raise SystemExit("missing in PYZ: " + ", ".join(missing))
+print("PYZ OK: " + ", ".join(sorted(need)))
+'@
+    $probeFile = Join-Path $env:TEMP "gromov_pyz_smoke.py"
+    Set-Content -Path $probeFile -Value $probe -Encoding UTF8
+    & $py $probeFile $exe
+    if ($LASTEXITCODE -ne 0) {
+        throw "Smoke gate FAILED: version/help_dialog not inside frozen PYZ. Do not ship."
+    }
+    # Cross-check Analysis TOC as well.
+    $toc = Join-Path $root "build\GROMOV-RestorePlus\PYZ-00.toc"
+    if (Test-Path $toc) {
+        $tocText = Get-Content $toc -Raw
+        if ($tocText -notmatch "\('version',\s*\r?\n\s*'[^']*src\\version\.py'") {
+            if ($tocText -notmatch "'version'") {
+                throw "Smoke gate FAILED: PYZ-00.toc missing version entry."
+            }
+        }
+        Write-Host "Smoke gate: PYZ-00.toc lists version"
+    }
+
+    # Brief launch: process must stay alive without ModuleNotFoundError crash.
+    $logPath = Join-Path $env:LOCALAPPDATA "GROMOV\RestorePlus\startup_crash.log"
+    if (Test-Path $logPath) { Remove-Item $logPath -Force -ErrorAction SilentlyContinue }
+    $proc = Start-Process -FilePath $exe -PassThru -WindowStyle Minimized
+    Start-Sleep -Seconds 5
+    if ($proc.HasExited) {
+        $code = $proc.ExitCode
+        $crash = ""
+        if (Test-Path $logPath) { $crash = Get-Content $logPath -Raw -ErrorAction SilentlyContinue }
+        throw "Smoke gate FAILED: frozen exe exited within 5s (code=$code). Crash log:`n$crash"
+    }
+    try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+    Start-Sleep -Milliseconds 500
+    if (Test-Path $logPath) {
+        $crash = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+        if ($crash -match "ModuleNotFoundError|No module named") {
+            throw "Smoke gate FAILED: startup_crash.log reports missing module:`n$crash"
+        }
+    }
+    Write-Host "Smoke gate: frozen exe stayed alive (OK)"
+}
+Assert-FrozenVersionModule -DistRoot $dist
+
 $zip = Join-Path $root "dist\GROMOV-RestorePlus-Portable.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path $dist -DestinationPath $zip -Force
@@ -209,7 +278,7 @@ if ($iscc) {
                 "https://ghfast.top/$setupUrl"
             )
             sha256     = $sha
-            notes      = "Ускорили работу, добавили Т-Банк и освежили дизайн интерфейса."
+            notes      = "Ускорили работу, добавили Т-Банк, освежили дизайн и исправили установку обновления / проверку целостности инструментов."
         }
         $manifestPath = Join-Path $root "release\version.json"
         $json = ($manifest | ConvertTo-Json -Depth 5)

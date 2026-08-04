@@ -1,13 +1,13 @@
 {
-  "version": "1.4.0",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
+  "version": "1.4.1",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
   "setup_urls": [
-    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
-    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
-    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
-    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
-    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe"
+    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
+    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
+    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
+    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
+    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe"
   ],
-  "sha256": "22684712f6239699dbf877460dcb229bf325529872b53e5ea31bb7dec8247084",
-  "notes": "Ускорили работу, добавили Т-Банк и освежили дизайн интерфейса."
+  "sha256": "13ed9594a6f664129eb058d9b79e0ff43d4b35252e894530fcd76cea844d0ac1",
+  "notes": "Ускорили работу, добавили Т-Банк, освежили дизайн и исправили установку обновления / проверку целостности инструментов."
 }
