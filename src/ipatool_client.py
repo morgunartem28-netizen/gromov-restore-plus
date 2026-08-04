@@ -80,6 +80,7 @@ class IpatoolClient:
             if secret:
                 save_secret(self.keychain_pass_path, secret)
         except OSError:
+            # Unreadable plaintext/legacy: wiped by load_secret — next login regenerates.
             pass
 
     def _scrub_legacy_secret_logs(self) -> None:
@@ -248,26 +249,41 @@ class IpatoolClient:
             pass
 
     _TWO_FACTOR_HINT = (
-        "Apple запросил код подтверждения.\n"
-        "Код обычно приходит как уведомление на доверенный iPhone/iPad/Mac "
-        "(не всегда SMS).\n"
-        "Введите 6 цифр ниже и снова нажмите «Войти» — код действует около 30 секунд."
+        "Нужен код подтверждения Apple ID.\n"
+        "Важно: это сообщение появляется и при неверном email/пароле — "
+        "push при этом НЕ приходит.\n"
+        "1) Проверьте email и пароль.\n"
+        "2) Если данные верны — код придёт уведомлением на доверенный "
+        "iPhone/iPad/Mac, либо возьмите его вручную: Настройки → Apple ID → "
+        "Вход и безопасность → Получить код проверки.\n"
+        "3) Введите 6 цифр сразу (~30 сек) и снова «Войти»."
     )
 
     def auth_login(self, email: str, password: str, auth_code: str | None = None) -> dict:
         # Cancel from a previous install must not block a new login.
         self.clear_cancel()
         code = (auth_code or "").replace(" ", "").strip()
-        args = ["auth", "login", "--email", email]
         secret_env = {"IPATOOL_PASSWORD": password}
         if code:
             secret_env["IPATOOL_AUTH_CODE"] = code
 
-        completed = self._run(args, secret_env=secret_env)
+        completed = self._run(
+            ["auth", "login", "--email", email],
+            secret_env=secret_env,
+        )
+        # Diagnostic only — never log the code; helps distinguish empty vs filled retries.
+        try:
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with self.log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{stamp}] diag has_auth_code={1 if code else 0}\n")
+            protect_sensitive_file(self.log_path)
+        except OSError:
+            pass
         combined = f"{completed.stdout or ''}\n{completed.stderr or ''}".strip()
 
-        # ipatool non-interactive: ErrAuthCodeRequired → exit 0 + info message
-        # ("2FA code is required…"). That means Apple already triggered the code.
+        # ipatool non-interactive: ErrAuthCodeRequired → exit 0 + info message.
+        # Upstream maps Apple BadLogin (empty auth code) to this — wrong password
+        # OR real 2FA look identical; do not claim a push was sent.
         if self.needs_two_factor(combined) and not code:
             raise IpatoolTwoFactorRequired(self._TWO_FACTOR_HINT)
 
@@ -366,11 +382,12 @@ class IpatoolClient:
 
     @staticmethod
     def needs_two_factor(error_text: str) -> bool:
-        """True only when Apple/ipatool actually asked for a 2FA code.
+        """True when ipatool signals the 2FA / BadLogin-without-code path.
 
-        Do NOT treat generic BadLogin / incorrect password as 2FA — that falsely
-        tells the user a code was sent when Apple never triggered one.
-        ipatool maps the real 2FA case to «auth code is required» / «2FA code is required».
+        Upstream ipatool maps Apple ``MZFinance.BadLogin`` (with empty auth code)
+        to «2FA code is required». Wrong email/password produces the same signal
+        as a real 2FA challenge — push is only sent when credentials are correct.
+        Do NOT treat raw «BadLogin» / «incorrect password» strings alone as 2FA.
         """
         text = error_text.lower()
         markers = (

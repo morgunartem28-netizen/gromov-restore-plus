@@ -7,12 +7,12 @@ import customtkinter as ctk
 
 from theme import THEME
 
-# Длительности анимаций (мс)
-DURATION_FAST = 150
-DURATION_NORMAL = 220
-DURATION_SLOW = 300
-DURATION_THEME = 180
-STAGGER_DELAY = 45
+# Durations — snappy premium (100–200ms)
+DURATION_FAST = 120
+DURATION_NORMAL = 160
+DURATION_SLOW = 200
+DURATION_THEME = 160
+STAGGER_DELAY = 40
 THEME_FADE_FLOOR = 0.08
 THEME_FADE_TARGET = 0.99
 
@@ -39,7 +39,7 @@ def lerp_color(from_color: str, to_color: str, t: float) -> str:
 
 
 class AnimationRunner:
-    """Отменяемые after()-анимации для одного виджета."""
+    """Cancelable after()-animations for one widget."""
 
     def __init__(self, widget: ctk.CTkBaseClass) -> None:
         self._widget = widget
@@ -74,7 +74,7 @@ class AnimationRunner:
         on_frame: Callable[[float], None],
         on_complete: Callable[[], None] | None = None,
         easing: Callable[[float], float] = ease_out_cubic,
-        interval_ms: int = 24,
+        interval_ms: int = 20,
     ) -> None:
         self.cancel(key)
         token = self._next_token(key)
@@ -107,15 +107,19 @@ class AnimationRunner:
         from_border: str | None = None,
         to_border: str | None = None,
         duration_ms: int = DURATION_FAST,
+        on_complete: Callable[[], None] | None = None,
     ) -> None:
         def on_frame(t: float) -> None:
             fg = lerp_color(from_fg, to_fg, t)
             kwargs: dict[str, object] = {"fg_color": fg}
             if from_border is not None and to_border is not None:
                 kwargs["border_color"] = lerp_color(from_border, to_border, t)
-            widget.configure(**kwargs)
+            try:
+                widget.configure(**kwargs)
+            except tk.TclError:
+                pass
 
-        self.tween(key, duration_ms=duration_ms, on_frame=on_frame)
+        self.tween(key, duration_ms=duration_ms, on_frame=on_frame, on_complete=on_complete)
 
 
 def fade_in_window(window: ctk.CTkToplevel | ctk.CTk, *, duration_ms: int = DURATION_NORMAL) -> None:
@@ -146,15 +150,14 @@ def bind_smooth_hover(
     is_selected: Callable[[], bool],
     duration_ms: int = DURATION_FAST,
 ) -> None:
-    # Targets read THEME live so hover stays correct after in-place theme switch.
-    _ = (normal_fg, hover_fg, normal_border, hover_border)
+    """Soft lift on hover; skips when selected. Reads live colors to avoid snap."""
 
-    def _color(attr: str, fallback_key: str) -> str:
+    def _color(attr: str, fallback: str) -> str:
         try:
             value = card.cget(attr)
         except tk.TclError:
-            return THEME[fallback_key]
-        return value if isinstance(value, str) and value.startswith("#") else THEME[fallback_key]
+            return fallback
+        return value if isinstance(value, str) and value.startswith("#") else fallback
 
     def on_enter(_event: object) -> None:
         if is_selected():
@@ -162,10 +165,10 @@ def bind_smooth_hover(
         runner.tween_colors(
             card,
             f"hover:{card_key}",
-            from_fg=_color("fg_color", "glass"),
-            to_fg=THEME["glass_hover"],
-            from_border=_color("border_color", "glass_border"),
-            to_border=THEME["glass_border_bright"],
+            from_fg=_color("fg_color", normal_fg),
+            to_fg=hover_fg,
+            from_border=_color("border_color", normal_border),
+            to_border=hover_border,
             duration_ms=duration_ms,
         )
 
@@ -176,15 +179,63 @@ def bind_smooth_hover(
         runner.tween_colors(
             card,
             f"hover:{card_key}",
-            from_fg=_color("fg_color", "glass_hover"),
-            to_fg=THEME["glass"],
-            from_border=_color("border_color", "glass_border_bright"),
-            to_border=THEME["glass_border"],
+            from_fg=_color("fg_color", hover_fg),
+            to_fg=normal_fg,
+            from_border=_color("border_color", hover_border),
+            to_border=normal_border,
             duration_ms=duration_ms,
         )
 
     card.bind("<Enter>", on_enter)
     card.bind("<Leave>", on_leave)
+
+
+def animate_card_select(
+    runner: AnimationRunner,
+    card: ctk.CTkFrame,
+    card_key: str,
+    *,
+    selected: bool,
+    duration_ms: int = DURATION_NORMAL,
+) -> None:
+    """Glow into selected accent state, or settle back to elevated glass."""
+    runner.cancel(f"hover:{card_key}")
+    key = f"select:{card_key}"
+    try:
+        from_fg = card.cget("fg_color")
+        from_border = card.cget("border_color")
+    except tk.TclError:
+        from_fg = THEME["glass_inner"]
+        from_border = THEME["glass_border"]
+    if not isinstance(from_fg, str) or not from_fg.startswith("#"):
+        from_fg = THEME["glass_inner"]
+    if not isinstance(from_border, str) or not from_border.startswith("#"):
+        from_border = THEME["glass_border"]
+
+    if selected:
+        to_fg = THEME["glass_selected"]
+        to_border = THEME["accent"]
+        try:
+            card.configure(border_width=2)
+        except tk.TclError:
+            pass
+    else:
+        to_fg = THEME["glass_inner"]
+        to_border = THEME["glass_border"]
+        try:
+            card.configure(border_width=1)
+        except tk.TclError:
+            pass
+
+    runner.tween_colors(
+        card,
+        key,
+        from_fg=from_fg,
+        to_fg=to_fg,
+        from_border=from_border,
+        to_border=to_border,
+        duration_ms=duration_ms,
+    )
 
 
 def fade_window_alpha(
@@ -221,19 +272,47 @@ def fade_window_alpha(
 def bind_press_feedback(runner: AnimationRunner, button: ctk.CTkButton, *, pressed_scale: float = 0.96) -> None:
     normal_height = button.cget("height")
     if not isinstance(normal_height, (int, float)) or normal_height <= 0:
-        normal_height = 36
-    pressed_height = max(28, int(normal_height * pressed_scale))
+        normal_height = 40
+    pressed_height = max(30, int(normal_height * pressed_scale))
     key = f"press:{id(button)}"
+    try:
+        normal_fg = button.cget("fg_color")
+        hover_fg = button.cget("hover_color")
+    except tk.TclError:
+        normal_fg = THEME["accent"]
+        hover_fg = THEME["accent_hover"]
+
+    def _as_hex(value: object, fallback: str) -> str:
+        if isinstance(value, str) and value.startswith("#"):
+            return value
+        if isinstance(value, (tuple, list)) and value:
+            last = value[-1]
+            if isinstance(last, str) and last.startswith("#"):
+                return last
+        return fallback
+
+    normal_hex = _as_hex(normal_fg, THEME["accent"])
+    pressed_hex = THEME.get("accent_pressed", THEME["accent"])
+    # Secondary/ghost: darken toward chip, not accent_pressed
+    if normal_hex.lower() not in (THEME["accent"].lower(), THEME["accent_hover"].lower()):
+        pressed_hex = THEME["glass_edge"]
 
     def press(_event: object) -> None:
         runner.cancel(key)
-        button.configure(height=pressed_height)
+        try:
+            button.configure(height=pressed_height, fg_color=pressed_hex)
+        except tk.TclError:
+            pass
 
     def release(_event: object) -> None:
-        button.configure(height=normal_height)
+        try:
+            button.configure(height=normal_height, fg_color=normal_hex)
+        except tk.TclError:
+            pass
 
     button.bind("<ButtonPress-1>", press)
     button.bind("<ButtonRelease-1>", release)
+    _ = hover_fg
 
 
 def reveal_card(

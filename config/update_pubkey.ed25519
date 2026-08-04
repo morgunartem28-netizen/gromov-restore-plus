@@ -1,0 +1,7 @@
+# Ed25519 public key for signed update manifests (Wave C).
+# One line base64/urlsafe-base64 of the 32-byte public key.
+# Leave empty / file unused until the first signed release is published.
+# Set require_manifest_signature=true in update.json to enforce.
+#
+# Example (placeholder — replace before enforcing):
+# REPLACE_WITH_BASE64_PUBLIC_KEY

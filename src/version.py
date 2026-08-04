@@ -1,3 +1,3 @@
-﻿"""App version - bump on each release (and in build/installer.iss)."""
+"""App version - bump on each release (and in build/installer.iss)."""
 
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4.0"

@@ -9,7 +9,9 @@ from pathlib import Path
 from config_manager import AppEntry, ConfigManager
 from device_installer import DeviceInstallCancelled, DeviceInstaller, DeviceInstallerError
 from disk_utils import DiskSpaceError, ensure_download_space
+from ipa_utils import inspect_fairplay_markers
 from ipatool_client import IpatoolCancelled, IpatoolClient, IpatoolError
+from security_utils import mask_email
 
 PhaseCallback = Callable[[str, float, str], None]
 
@@ -88,6 +90,24 @@ def run_install_job(
             poller.join(timeout=1)
 
     phase("verify", 0.62, "Проверка файла...")
+    markers = inspect_fairplay_markers(ipa_path)
+    if markers is None:
+        phase("verify", 0.63, "FairPlay: метаданные IPA не прочитаны")
+    else:
+        apple = mask_email(markers.apple_id) if markers.apple_id else "—"
+        sinf = f"sinf×{markers.sinf_count}" if markers.has_sinf else "без .sinf"
+        crypt = f"cryptid={markers.cryptid}" if markers.cryptid is not None else "cryptid=?"
+        phase(
+            "verify",
+            0.64,
+            f"FairPlay: {apple} · {sinf} · {crypt}",
+        )
+        if not markers.looks_customer_ipa:
+            phase(
+                "verify",
+                0.65,
+                "Предупреждение: IPA без типичных маркеров FairPlay (sinf+cryptid=1)",
+            )
     phase("transfer", 0.70, "Передача на iPhone...")
 
     def progress(value: float, text: str) -> None:

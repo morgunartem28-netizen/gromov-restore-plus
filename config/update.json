@@ -4,5 +4,7 @@
     "https://cdn.jsdelivr.net/gh/morgunartem28-netizen/gromov-restore-plus@main/release/version.json",
     "https://raw.githubusercontent.com/morgunartem28-netizen/gromov-restore-plus/main/release/version.json",
     "https://github.com/morgunartem28-netizen/gromov-restore-plus/raw/main/release/version.json"
-  ]
+  ],
+  "require_manifest_signature": false,
+  "manifest_pubkey": "update_pubkey.ed25519"
 }

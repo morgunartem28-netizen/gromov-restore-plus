@@ -320,6 +320,85 @@ class ConfigManager:
             days = DEFAULT_NEW_APP_DAYS
         return max(1, days)
 
+    def catalog_tabs_raw(self) -> list:
+        cfg = self._load_catalog_config()
+        raw = cfg.get("tabs") or []
+        return raw if isinstance(raw, list) else []
+
+    def catalog_categories(self, *, include_hidden: bool = False) -> list[dict]:
+        cfg = self._load_catalog_config()
+        raw = cfg.get("categories") or []
+        items = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+        if not include_hidden:
+            items = [item for item in items if not bool(item.get("hidden"))]
+        def _order(item: dict) -> tuple[int, str]:
+            try:
+                order = int(item.get("order", 1000))
+            except (TypeError, ValueError):
+                order = 1000
+            return (order, str(item.get("title") or ""))
+
+        return sorted(items, key=_order)
+
+    def category_app_count(self, category_id: str) -> int:
+        return len(self.list_apps_for_category(category_id))
+
+    def _bank_groups_from_config(self) -> tuple[BankGroup, ...]:
+        cfg = self._load_catalog_config()
+        raw = cfg.get("bankGroups") or []
+        if not isinstance(raw, list) or not raw:
+            return BANK_GROUPS
+        groups: list[BankGroup] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            gid = str(item.get("id") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not gid or not title:
+                continue
+            groups.append(
+                BankGroup(
+                    id=gid,
+                    title=title,
+                    color=str(item.get("color") or "#888888"),
+                    letter=str(item.get("letter") or title[:1] or "?"),
+                )
+            )
+        return tuple(groups) if groups else BANK_GROUPS
+
+    def all_bank_groups(self) -> list[BankGroup]:
+        return list(self._bank_groups_from_config())
+
+    def list_apps_for_category(self, category_id: str) -> list[AppEntry]:
+        """Resolve apps for a catalog.json category definition."""
+        category_id = (category_id or "").strip()
+        if not category_id:
+            return []
+        match: dict = {}
+        for item in self.catalog_categories():
+            if str(item.get("id") or "") == category_id:
+                raw_match = item.get("match") or {}
+                match = raw_match if isinstance(raw_match, dict) else {}
+                break
+        else:
+            return []
+
+        apps = self.list_apps()
+        if match.get("isBanking") is True:
+            return [app for app in apps if app.is_banking]
+
+        app_ids = match.get("appIds") or match.get("app_ids") or []
+        if isinstance(app_ids, list) and app_ids:
+            wanted = {str(x).strip() for x in app_ids if str(x).strip()}
+            return [app for app in apps if app.id in wanted]
+
+        category_names = match.get("categoryNames") or match.get("categories") or []
+        if isinstance(category_names, list) and category_names:
+            names = {str(x).strip().lower() for x in category_names if str(x).strip()}
+            return [app for app in apps if (app.category or "").strip().lower() in names]
+
+        return []
+
     def popular_item_ids(self) -> list[str]:
         cfg = self._load_catalog_config()
         raw = cfg.get("popular") or []
@@ -403,7 +482,13 @@ class ConfigManager:
 
     def list_bank_groups(self) -> list[BankGroup]:
         counts = self.banking_app_counts()
-        return [group for group in BANK_GROUPS if counts.get(group.id, 0) > 0]
+        return [group for group in self._bank_groups_from_config() if counts.get(group.id, 0) > 0]
+
+    def get_bank_group(self, bank_group_id: str) -> BankGroup | None:
+        for group in self._bank_groups_from_config():
+            if group.id == bank_group_id:
+                return group
+        return None
 
     def banking_app_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -411,12 +496,6 @@ class ConfigManager:
             if app.is_banking and app.bankGroup:
                 counts[app.bankGroup] = counts.get(app.bankGroup, 0) + 1
         return counts
-
-    def get_bank_group(self, bank_group_id: str) -> BankGroup | None:
-        for group in BANK_GROUPS:
-            if group.id == bank_group_id:
-                return group
-        return None
 
     def list_banking_apps_for_group(self, bank_group: str) -> list[AppEntry]:
         apps = [app for app in self.list_apps() if app.is_banking and app.bankGroup == bank_group]
@@ -523,41 +602,94 @@ class ConfigManager:
         result.sort(key=lambda item: sort_dates.get(item.id, item.freshness_date()), reverse=True)
         return result
 
+    @staticmethod
+    def normalize_search_text(value: str) -> str:
+        """Casefold + ё→е; collapse punctuation/spaces for stable matching."""
+        text = (value or "").strip().casefold().replace("ё", "е")
+        parts: list[str] = []
+        prev_space = False
+        for ch in text:
+            if ch in "-_./\\|,;:":
+                ch = " "
+            if ch.isspace():
+                if prev_space:
+                    continue
+                prev_space = True
+                parts.append(" ")
+                continue
+            prev_space = False
+            parts.append(ch)
+        return "".join(parts).strip()
+
     def _expand_search_terms(self, query: str) -> set[str]:
-        q = query.strip().lower()
-        terms = {q}
+        q = self.normalize_search_text(query)
         if not q:
-            return terms
+            return set()
+        terms = {q}
         aliases = self.search_alias_map()
+        # Exact alias key.
         if q in aliases:
             terms.update(aliases[q])
-        for key, values in aliases.items():
-            if q == key or q in values or any(q in value for value in values) or q in key:
-                terms.add(key)
-                terms.update(values)
-        return {term for term in terms if term}
+        # Prefix expansion only (never bare substring) — avoids «аль»→half the catalog
+        # via accidental hits inside unrelated alias values.
+        if len(q) >= 2:
+            for key, values in aliases.items():
+                key_n = self.normalize_search_text(key)
+                if key_n.startswith(q) or q.startswith(key_n):
+                    terms.add(key_n)
+                    terms.update(values)
+                    continue
+                for value in values:
+                    value_n = self.normalize_search_text(value)
+                    if value_n == q or value_n.startswith(q) or q.startswith(value_n):
+                        terms.add(key_n)
+                        terms.update(values)
+                        break
+        return {self.normalize_search_text(term) for term in terms if term}
 
     def app_matches_query(self, app: AppEntry, query: str) -> bool:
-        terms = self._expand_search_terms(query)
+        q = self.normalize_search_text(query)
+        terms = self._expand_search_terms(q)
         if not terms:
             return True
-        haystack = " ".join(
-            part
-            for part in (
-                app.title,
-                app.maskTitle,
-                app.description,
-                app.bundleId,
-                str(app.appId),
-                app.bankGroup,
-                " ".join(app.aliases),
+        # Primary fields only — descriptions like «официальное» contain «аль» as noise.
+        primary = self.normalize_search_text(
+            " ".join(
+                part
+                for part in (
+                    app.title,
+                    app.maskTitle,
+                    app.bundleId,
+                    str(app.appId),
+                    app.bankGroup,
+                    " ".join(app.aliases),
+                )
+                if part
             )
-            if part
-        ).lower()
-        return any(term in haystack for term in terms)
+        )
+        for term in terms:
+            if not term:
+                continue
+            if len(term) == 1:
+                # Single letter: title/alias token prefix only.
+                if any(
+                    token.startswith(term)
+                    for token in primary.split()
+                ):
+                    return True
+                continue
+            if term in primary:
+                return True
+        # Long queries may also match description (min 4 chars per term).
+        if len(q) >= 4:
+            secondary = self.normalize_search_text(app.description or "")
+            for term in terms:
+                if len(term) >= 4 and term in secondary:
+                    return True
+        return False
 
     def search_apps(self, query: str) -> list[AppEntry]:
-        q = query.strip().lower()
+        q = self.normalize_search_text(query)
         if not q:
             return []
         return [app for app in self.list_apps() if self.app_matches_query(app, q)]

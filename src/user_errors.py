@@ -36,7 +36,12 @@ def friendly_error(exc: BaseException | str, *, domain: str = "Общая") -> t
 
     if domain == "Apple ID" or "apple" in lower or "auth" in lower or "login" in lower:
         if "2fa code is required" in lower or "auth code is required" in lower:
-            return "Apple ID", "Нужен код подтверждения с доверенного iPhone/Mac (уведомление, не email)."
+            return (
+                "Apple ID",
+                "Нужен код подтверждения.\n"
+                "Если push не пришёл — проверьте email/пароль, либо возьмите код "
+                "в Настройки → Apple ID → Получить код проверки.",
+            )
         if "hex digit" in lower or "unmarshal xml" in lower:
             return (
                 "Apple ID",

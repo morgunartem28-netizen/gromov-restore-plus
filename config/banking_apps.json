@@ -69,6 +69,19 @@
       "aliases": ["сберкидс", "sberkids", "kids", "дети"]
     },
     {
+      "id": "tbank-air-pilot-log",
+      "title": "Т-Банк",
+      "bankGroup": "tbank",
+      "bundleId": "",
+      "appId": 6778332772,
+      "maskTitle": "Air Pilot Log",
+      "description": "Т-Банк",
+      "iconFile": "tbank-air-pilot-log.png",
+      "catalogStandalone": true,
+      "addedAt": "2026-08-04",
+      "aliases": ["тинькофф", "tinkoff", "air pilot", "airpilot"]
+    },
+    {
       "id": "tbank-toastmas",
       "title": "Т-Банк",
       "bankGroup": "tbank",

@@ -1,13 +1,30 @@
 from __future__ import annotations
 
 import plistlib
+import struct
 import time
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 # IPA cache lives under data_dir()/downloads (AppData), not next to the .exe —
 # so a custom install folder cannot break cleanup or leave orphan caches.
 IPA_CACHE_MAX_AGE_DAYS = 7
+
+
+@dataclass(frozen=True)
+class FairPlayMarkers:
+    """Lightweight FairPlay / Customer-IPA signals (no decrypt)."""
+
+    apple_id: str | None
+    has_sinf: bool
+    sinf_count: int
+    cryptid: int | None
+    bundle_id: str | None
+
+    @property
+    def looks_customer_ipa(self) -> bool:
+        return bool(self.has_sinf and self.cryptid == 1)
 
 # Старые bundle ID в каталоге, которые всё ещё относятся к тому же приложению.
 _BUNDLE_EQUIVALENTS: tuple[frozenset[str], ...] = (
@@ -49,6 +66,99 @@ def read_ipa_bundle_id(path: Path) -> str | None:
             bundle_id = info.get("CFBundleIdentifier")
             return str(bundle_id) if bundle_id else None
     except (zipfile.BadZipFile, OSError, KeyError, plistlib.InvalidFileException, ValueError):
+        return None
+
+
+def _macho_cryptids(data: bytes) -> list[int]:
+    """Return cryptid values from LC_ENCRYPTION_INFO(_64); empty if not Mach-O."""
+    if len(data) < 8:
+        return []
+    mh64, mh64_cigam = 0xFEEDFACF, 0xCFFAEDFE
+    mh32, mh32_cigam = 0xFEEDFACE, 0xCEFAEDFE
+    lc_enc, lc_enc64 = 0x21, 0x2C
+    magic_be = struct.unpack(">I", data[:4])[0]
+    offsets: list[int] = []
+    if magic_be in (0xCAFEBABE, 0xBEBAFECA):
+        le = magic_be == 0xBEBAFECA
+        nfat = struct.unpack("<I" if le else ">I", data[4:8])[0]
+        for i in range(min(nfat, 8)):
+            off = 8 + i * 20
+            chunk = data[off : off + 20]
+            if len(chunk) < 20:
+                break
+            _, _, offset, _, _ = struct.unpack("<IIIII" if le else ">IIIII", chunk)
+            offsets.append(offset)
+    else:
+        offsets = [0]
+
+    found: list[int] = []
+    for base in offsets:
+        if base + 28 > len(data):
+            continue
+        magic_l = struct.unpack_from("<I", data, base)[0]
+        if magic_l in (mh64, mh32):
+            endian = "<"
+        elif magic_l in (mh64_cigam, mh32_cigam):
+            endian = ">"
+            magic_l = struct.unpack_from(">I", data, base)[0]
+        else:
+            continue
+        is64 = magic_l in (mh64, mh64_cigam)
+        hdr = 32 if is64 else 28
+        ncmds = struct.unpack_from(endian + "I", data, base + 16)[0]
+        pos = base + hdr
+        for _ in range(min(ncmds, 256)):
+            if pos + 8 > len(data):
+                break
+            cmd, cmdsize = struct.unpack_from(endian + "II", data, pos)
+            if cmd in (lc_enc, lc_enc64) and cmdsize >= 20:
+                cryptid = struct.unpack_from(endian + "I", data, pos + 16)[0]
+                found.append(int(cryptid))
+            if cmdsize < 8:
+                break
+            pos += cmdsize
+    return found
+
+
+def inspect_fairplay_markers(path: Path) -> FairPlayMarkers | None:
+    """Read apple-id / .sinf / cryptid from a Customer IPA. Never raises."""
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            names = archive.namelist()
+            sinfs = [n for n in names if n.endswith(".sinf")]
+            apple_id: str | None = None
+            meta_name = next(
+                (n for n in names if n.rstrip("/").endswith("iTunesMetadata.plist")),
+                None,
+            )
+            if meta_name:
+                meta = plistlib.loads(archive.read(meta_name))
+                raw = meta.get("apple-id") or meta.get("appleId") or meta.get("userName")
+                if isinstance(raw, str) and raw.strip():
+                    apple_id = raw.strip()
+
+            info_path = _main_app_info_plist_path(names)
+            bundle_id: str | None = None
+            cryptid: int | None = None
+            if info_path:
+                info = plistlib.loads(archive.read(info_path))
+                bid = info.get("CFBundleIdentifier")
+                bundle_id = str(bid) if bid else None
+                exe = info.get("CFBundleExecutable")
+                if exe:
+                    exe_path = f"{info_path.rsplit('/', 1)[0]}/{exe}"
+                    if exe_path in names:
+                        ids = _macho_cryptids(archive.read(exe_path))
+                        if ids:
+                            cryptid = ids[0]
+            return FairPlayMarkers(
+                apple_id=apple_id,
+                has_sinf=bool(sinfs),
+                sinf_count=len(sinfs),
+                cryptid=cryptid,
+                bundle_id=bundle_id,
+            )
+    except (zipfile.BadZipFile, OSError, KeyError, plistlib.InvalidFileException, ValueError, struct.error):
         return None
 
 

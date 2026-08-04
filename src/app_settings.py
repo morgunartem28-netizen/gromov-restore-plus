@@ -1,7 +1,8 @@
-"""Persisted user settings (cache retention, etc.)."""
+"""Persisted user settings (cache retention, recent installs, history)."""
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app_paths import data_dir
@@ -9,7 +10,9 @@ from app_paths import data_dir
 DEFAULT_IPA_CACHE_DAYS = 7
 ALLOWED_CACHE_DAYS = (3, 7, 30)
 DEFAULT_THEME_MODE = "dark"
-ALLOWED_THEME_MODES = ("light", "dark")  # light kept for migration; UI forces dark
+ALLOWED_THEME_MODES = ("dark",)
+RECENT_INSTALL_LIMIT = 10
+INSTALL_HISTORY_LIMIT = 30
 
 
 class AppSettings:
@@ -72,26 +75,109 @@ class AppSettings:
 
     @property
     def recent_installs(self) -> list[str]:
+        return [item["id"] for item in self.recent_install_records]
+
+    @property
+    def recent_install_records(self) -> list[dict[str, str]]:
+        """Normalized recent installs: [{id, at}, ...] newest first."""
         raw = self._data.get("recent_installs") or []
         if not isinstance(raw, list):
             return []
-        return [str(item).strip() for item in raw if str(item).strip()][:8]
+        out: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in raw:
+            app_id = ""
+            at = ""
+            if isinstance(item, str):
+                app_id = item.strip()
+            elif isinstance(item, dict):
+                app_id = str(item.get("id") or "").strip()
+                at = str(item.get("at") or "").strip()
+            if not app_id or app_id in seen:
+                continue
+            seen.add(app_id)
+            out.append({"id": app_id, "at": at})
+        return out[:RECENT_INSTALL_LIMIT]
 
     def remember_install(self, app_id: str) -> None:
         aid = app_id.strip()
         if not aid:
             return
-        items = [aid] + [item for item in self.recent_installs if item != aid]
-        self._data["recent_installs"] = items[:8]
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        items = [{"id": aid, "at": now}] + [
+            rec for rec in self.recent_install_records if rec["id"] != aid
+        ]
+        self._data["recent_installs"] = items[:RECENT_INSTALL_LIMIT]
+        self.save()
+
+    def clear_recent_installs(self) -> None:
+        self._data["recent_installs"] = []
         self.save()
 
     @property
+    def install_history(self) -> list[dict]:
+        raw = self._data.get("install_history") or []
+        if not isinstance(raw, list):
+            return []
+        out: list[dict] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            app_id = str(item.get("id") or "").strip()
+            if not app_id:
+                continue
+            out.append(
+                {
+                    "id": app_id,
+                    "at": str(item.get("at") or ""),
+                    "result": str(item.get("result") or ""),
+                    "error": str(item.get("error") or ""),
+                    "title": str(item.get("title") or ""),
+                }
+            )
+        return out[:INSTALL_HISTORY_LIMIT]
+
+    def record_install_result(
+        self,
+        app_id: str,
+        *,
+        title: str = "",
+        result: str = "ok",
+        error: str = "",
+    ) -> None:
+        aid = app_id.strip()
+        if not aid:
+            return
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        entry = {
+            "id": aid,
+            "title": title,
+            "at": now,
+            "result": result,
+            "error": (error or "")[:400],
+        }
+        items = [entry] + [h for h in self.install_history if h.get("id") != aid or h.get("at") != now]
+        self._data["install_history"] = items[:INSTALL_HISTORY_LIMIT]
+        if result == "ok":
+            self.remember_install(aid)
+        else:
+            self.save()
+
+    @property
     def theme_mode(self) -> str:
-        """Always dark — light theme removed; stored value ignored."""
+        """Always dark — legacy light/system values migrate on read."""
+        value = str(self._data.get("theme_mode", DEFAULT_THEME_MODE) or DEFAULT_THEME_MODE).strip().lower()
+        if value != "dark":
+            # One-shot migrate stale prefs so settings.json stays coherent.
+            self._data["theme_mode"] = "dark"
+            try:
+                self.save()
+            except OSError:
+                pass
         return "dark"
 
     @theme_mode.setter
     def theme_mode(self, mode: str) -> None:
-        # Persist dark only so old "light" settings migrate away.
+        _ = mode
         self._data["theme_mode"] = "dark"
         self.save()

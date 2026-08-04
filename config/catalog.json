@@ -1,6 +1,50 @@
 {
-  "version": 1,
+  "version": 2,
   "newDays": 30,
+  "tabs": [
+    {"id": "popular", "title": "Популярные", "kind": "popular"},
+    {"id": "new", "title": "Новые", "kind": "new"},
+    {"id": "recent", "title": "Недавние", "kind": "recent"},
+    {"id": "banks", "title": "Банки", "kind": "banks"},
+    {"id": "all", "title": "Все", "kind": "all"}
+  ],
+  "categories": [
+    {
+      "id": "banks",
+      "title": "Банки",
+      "description": "Банковские приложения и маски",
+      "icon": "bank",
+      "order": 1,
+      "match": {"isBanking": true}
+    },
+    {
+      "id": "social",
+      "title": "Социальные сети",
+      "description": "Мессенджеры и соцсети",
+      "icon": "social",
+      "order": 2,
+      "match": {"appIds": ["max", "vk"]}
+    },
+    {
+      "id": "marketplaces",
+      "title": "Маркетплейсы",
+      "description": "Объявления и магазины",
+      "icon": "shop",
+      "order": 3,
+      "match": {"appIds": ["avito", "avito-new"]}
+    }
+  ],
+  "bankGroups": [
+    {"id": "sber", "title": "Сбербанк", "color": "#21A038", "letter": "С"},
+    {"id": "tbank", "title": "Т-Банк", "color": "#FFDD2D", "letter": "T"},
+    {"id": "alfa", "title": "Альфа-Банк", "color": "#EF3124", "letter": "A"},
+    {"id": "sovcom", "title": "Совкомбанк", "color": "#003791", "letter": "С"},
+    {"id": "gazprom", "title": "Газпромбанк", "color": "#2355D7", "letter": "Г"},
+    {"id": "psb", "title": "ПСБ", "color": "#E35205", "letter": "П"},
+    {"id": "vtb", "title": "ВТБ", "color": "#002882", "letter": "В"},
+    {"id": "mts", "title": "МТС Банк", "color": "#E30611", "letter": "M"},
+    {"id": "rshb", "title": "Россельхозбанк", "color": "#006B3F", "letter": "Р"}
+  ],
   "popular": [
     "max",
     "vk",
@@ -37,8 +81,12 @@
     "сберкидс": ["сберkids", "sber-kids", "sberkids"],
     "авито": ["avito", "anero"],
     "anero": ["авито", "avito-new"],
-    "альфа": ["alfa", "альфа-банк", "инвестиции"],
+    "альфа": ["alfa", "альфа-банк"],
     "инвестиции": ["альфа инвестиции", "alfa-investments", "checkinvest"],
+    "max": ["макс", "max.ru"],
+    "макс": ["max", "max.ru"],
+    "втб": ["vtb", "sirius", "сириус"],
+    "vtb": ["втб", "sirius", "сириус"],
     "mail": ["mail.ru", "почта"],
     "почта": ["mail.ru", "mailru"]
   }

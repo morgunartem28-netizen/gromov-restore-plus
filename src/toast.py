@@ -31,16 +31,16 @@ class ToastHost:
         toast = ctk.CTkFrame(
             self._root,
             fg_color=THEME["surface_elevated"],
-            corner_radius=16,
+            corner_radius=20,
             border_width=1,
             border_color=THEME["glass_border_bright"],
         )
-        toast.place(relx=1.0, rely=1.0, x=-24, y=-24, anchor="se")
+        toast.place(relx=1.0, rely=1.0, x=-28, y=-28, anchor="se")
 
         inner = ctk.CTkFrame(toast, fg_color="transparent")
-        inner.pack(padx=14, pady=12)
+        inner.pack(padx=16, pady=14)
 
-        badge = ctk.CTkFrame(inner, fg_color=bg, corner_radius=12, width=32, height=32)
+        badge = ctk.CTkFrame(inner, fg_color=bg, corner_radius=14, width=36, height=36)
         badge.pack(side="left")
         badge.pack_propagate(False)
         ctk.CTkLabel(

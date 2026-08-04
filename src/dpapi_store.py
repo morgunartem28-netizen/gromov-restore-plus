@@ -1,14 +1,17 @@
 """Windows DPAPI helpers for local secret storage."""
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 
+class SecretStoreError(OSError):
+    """DPAPI protect/unprotect failed — caller should force re-auth."""
+
+
 def _crypt_protect(data: bytes) -> bytes:
     if sys.platform != "win32":
-        return data
+        raise SecretStoreError("DPAPI доступен только на Windows.")
     import ctypes
     import ctypes.wintypes as w
 
@@ -30,7 +33,7 @@ def _crypt_protect(data: bytes) -> bytes:
         0,
         ctypes.byref(out_blob),
     ):
-        raise OSError("CryptProtectData failed")
+        raise SecretStoreError("CryptProtectData failed")
     try:
         return ctypes.string_at(out_blob.pbData, out_blob.cbData)
     finally:
@@ -39,7 +42,7 @@ def _crypt_protect(data: bytes) -> bytes:
 
 def _crypt_unprotect(data: bytes) -> bytes:
     if sys.platform != "win32":
-        return data
+        raise SecretStoreError("DPAPI доступен только на Windows.")
     import ctypes
     import ctypes.wintypes as w
 
@@ -61,7 +64,7 @@ def _crypt_unprotect(data: bytes) -> bytes:
         0,
         ctypes.byref(out_blob),
     ):
-        raise OSError("CryptUnprotectData failed")
+        raise SecretStoreError("CryptUnprotectData failed")
     try:
         return ctypes.string_at(out_blob.pbData, out_blob.cbData)
     finally:
@@ -69,31 +72,31 @@ def _crypt_unprotect(data: bytes) -> bytes:
 
 
 def save_secret(path: Path, value: str) -> None:
+    """Encrypt with DPAPI. Never writes plaintext (Wave C)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = value.encode("utf-8")
-    try:
-        blob = _crypt_protect(payload)
-        path.write_bytes(blob)
-    except OSError:
-        # Fallback for non-Windows / DPAPI failure: still write, ACL applied by caller.
-        path.write_bytes(b"plain:" + payload)
+    blob = _crypt_protect(payload)
+    path.write_bytes(blob)
     from security_utils import protect_sensitive_file
 
     protect_sensitive_file(path)
 
 
 def load_secret(path: Path) -> str | None:
+    """Load DPAPI secret. Deletes legacy/plaintext files and returns None."""
     if not path.exists():
         return None
     raw = path.read_bytes()
+    # Legacy plaintext markers — wipe and force re-auth (no plaintext fallback).
     if raw.startswith(b"plain:"):
-        return raw[6:].decode("utf-8", errors="replace").strip() or None
+        delete_secret(path)
+        return None
     try:
         return _crypt_unprotect(raw).decode("utf-8", errors="replace").strip() or None
-    except OSError:
-        # Legacy plaintext passphrase from older builds.
-        text = raw.decode("utf-8", errors="replace").strip()
-        return text or None
+    except (OSError, SecretStoreError, ValueError):
+        # Unreadable / legacy raw UTF-8: do not return plaintext; wipe.
+        delete_secret(path)
+        return None
 
 
 def delete_secret(path: Path) -> None:

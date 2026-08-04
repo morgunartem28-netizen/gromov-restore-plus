@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app_paths import data_dir, resource_dir
+from manifest_crypto import ManifestSignatureError, maybe_verify_manifest
 from security_utils import (
     github_release_proxy_prefixes,
     is_trusted_manifest_url,
@@ -416,6 +417,36 @@ def sanitize_update_message(message: str) -> str:
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _read_update_policy() -> tuple[bool, Path]:
+    """Return (require_signature, pubkey_path)."""
+    candidates: list[Path] = [
+        resource_dir() / "config" / "update.json",
+        data_dir() / "update.json",
+    ]
+    require = False
+    pubkey_name = "update_pubkey.ed25519"
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        require = bool(payload.get("require_manifest_signature"))
+        name = str(payload.get("manifest_pubkey") or "").strip()
+        if name:
+            pubkey_name = name
+        break
+    pubkey_path = resource_dir() / "config" / pubkey_name
+    if not pubkey_path.exists():
+        alt = data_dir() / pubkey_name
+        if alt.exists():
+            pubkey_path = alt
+    return require, pubkey_path
 
 
 def _read_manifest_urls() -> list[str]:
@@ -921,6 +952,19 @@ def check_for_updates(*, current_version: str = APP_VERSION) -> UpdateCheckResul
             )
 
         payload = _fetch_manifest(manifest_urls)
+        try:
+            require_sig, pubkey_path = _read_update_policy()
+            status = maybe_verify_manifest(
+                payload, pubkey_path=pubkey_path, require=require_sig
+            )
+            _debug_log(f"manifest signature: {status} key={pubkey_path.name}")
+        except ManifestSignatureError as exc:
+            _debug_log(f"manifest signature FAIL: {exc}")
+            raise UpdateCheckError(
+                "Манифест обновлений не прошёл проверку подписи.\n"
+                f"{exc}\n"
+                "Обновление прервано для вашей безопасности."
+            ) from exc
         latest_version = str(payload.get("version") or "").strip()
         setup_url = str(payload.get("setup_url") or payload.get("download_url") or "").strip()
         notes = str(payload.get("notes") or payload.get("changelog") or "").strip()

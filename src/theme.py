@@ -1,88 +1,171 @@
 from __future__ import annotations
 
+from typing import Any
+
 import customtkinter as ctk
 
-# Graphite + Apple Blue — dark-only premium palette (2026 refresh).
-DARK_THEME: dict[str, str] = {
-    "bg": "#0C0E12",
-    "bg_soft": "#141820",
-    "surface": "#1A1E27",
-    "surface_elevated": "#222833",
+# ---------------------------------------------------------------------------
+# Dark only — commercial graphite Liquid Glass + Apple system blue.
+# Depth via layered surfaces (bg → outer mist → inner glass → elevated),
+# soft luminous borders, accent glow. Never flat identical gray bricks.
+# ---------------------------------------------------------------------------
+DARK_THEME: dict[str, Any] = {
+    # Atmosphere — deep graphite with cool blue undertone (never pure #000)
+    "bg": "#07090E",
+    "bg_soft": "#0C1018",
+    "bg_gradient_top": "#121822",
+    "bg_gradient_bottom": "#07090E",
+    "surface": "#121820",
+    "surface_elevated": "#1A2230",
+    # Type
     "silver": "#F5F5F7",
     "text": "#F5F5F7",
-    "text_secondary": "#AEAEB2",
-    "muted": "#8E8E93",
+    "text_secondary": "#A8ADB8",
+    "muted": "#7E8594",
+    # Accent — Apple blue; soft indigo only as glow companion
     "accent": "#0A84FF",
     "accent_hover": "#409CFF",
     "accent_pressed": "#0066CC",
-    "accent_soft": "#0A2540",
-    "accent_glow": "#0A84FF",
+    "accent_end": "#5E5CE6",
+    "accent_soft": "#0A1F38",
+    "accent_glow": "#1E5A96",
     "accent_text": "#FFFFFF",
+    # Status
     "success": "#30D158",
-    "success_soft": "#0F2A1A",
+    "success_soft": "#0A1F14",
     "warning": "#FFD60A",
     "warning_soft": "#2A2208",
     "error": "#FF453A",
     "error_soft": "#2A1210",
-    "glass": "#1A1E27",
-    "glass_hover": "#252B38",
-    "glass_selected": "#0A2540",
-    "glass_border": "#2E3544",
-    "glass_border_bright": "#4A5568",
-    "glass_highlight": "#0A2540",
-    "input": "#12151C",
-    "input_focus": "#1E2430",
-    "log": "#10131A",
-    "skeleton": "#252B38",
-    "skeleton_shine": "#323A4A",
+    # Glass layers (simulated translucency / depth — no fake blur loops)
+    "glass": "#141A24",
+    "glass_outer": "#0A0E16",
+    "glass_inner": "#1A2230",
+    "glass_hover": "#243044",
+    "glass_selected": "#0C2748",
+    "glass_border": "#2A3348",
+    "glass_border_bright": "#44516A",
+    "glass_highlight": "#2E3C54",
+    "glass_edge": "#1E2636",
+    "glass_rim": "#161C28",
+    # Inputs / chips
+    "input": "#0A0E16",
+    "input_focus": "#121A28",
+    "log": "#080C12",
+    "skeleton": "#1E2636",
+    "skeleton_shine": "#2A3448",
     "shadow": "#000000",
-    "chip": "#252B38",
+    "chip": "#1E2636",
     "chip_active": "#0A84FF",
     "chip_active_text": "#FFFFFF",
-    "promo": "#151A24",
-    "promo_border": "#2A3344",
-    "promo_hover": "#1C2433",
-    "disabled": "#3A3F4A",
-    "disabled_text": "#6B7080",
+    "promo": "#0E1420",
+    "promo_border": "#243048",
+    "promo_hover": "#162030",
+    "disabled": "#3A4050",
+    "disabled_text": "#6B7280",
+    # Install-card state fills
+    "card_idle": "#161E2C",
+    "card_ready": "#0C2748",
+    "card_installing": "#0C2748",
+    "card_done": "#0A1F14",
+    "card_error": "#2A1210",
 }
 
-THEME: dict[str, str] = dict(DARK_THEME)
+THEME: dict[str, Any] = dict(DARK_THEME)
+_THEME_PREFERENCE = "dark"
 _THEME_MODE = "dark"
 
+# Composition scale — usable density (catalog-first, not empty air)
 CORNER_RADIUS = 20
-CARD_PADX = 18
-CARD_PADY = 16
+CARD_PADX = 16
+CARD_PADY = 12
 RADIUS_PILL = 999
+RADIUS_BUTTON = 14
+RADIUS_SEARCH = 18
+RADIUS_SHELL = 20
+RADIUS_CARD = 16
+ICON_CARD = 44
+ICON_INSTALL = 48
+SIDEBAR_WIDTH = 268
+
+# Typography hierarchy (px)
+TYPE_BRAND = 26
+TYPE_TITLE = 16
+TYPE_SECTION = 11
+TYPE_BODY = 14
+TYPE_META = 12
+TYPE_CAPTION = 11
+TYPE_CARD_TITLE = 15
 
 
-def normalize_theme_mode(_mode: str | None = None) -> str:
-    """Always dark — light mode removed; arg kept for settings migration."""
+def detect_system_appearance() -> str:
+    """Dark-only product — always dark (kept for API compatibility)."""
     return "dark"
 
 
-def apply_theme(_mode: str | None = None) -> str:
-    """Ensure THEME is the dark palette. Mode arg ignored (migration-safe)."""
-    global _THEME_MODE
+def normalize_theme_mode(mode: str | None = None) -> str:
+    """Migrate any legacy light/system preference to dark."""
+    _ = mode
+    return "dark"
+
+
+def resolve_appearance(mode: str | None = None) -> str:
+    _ = mode
+    return "dark"
+
+
+def apply_theme(mode: str | None = None) -> str:
+    """Force dark palette. Ignores mode; always returns \"dark\"."""
+    global _THEME_MODE, _THEME_PREFERENCE
+    _ = mode
+    _THEME_PREFERENCE = "dark"
     _THEME_MODE = "dark"
     THEME.clear()
     THEME.update(DARK_THEME)
     return "dark"
 
 
-def get_theme() -> dict[str, str]:
+def get_theme() -> dict[str, Any]:
     return THEME
 
 
 def get_theme_mode() -> str:
-    return "dark"
+    """User preference — always dark."""
+    return _THEME_PREFERENCE
+
+
+def get_appearance() -> str:
+    """Resolved palette — always dark."""
+    return _THEME_MODE
 
 
 def is_dark_theme() -> bool:
     return True
 
 
+def theme_pair(key: str) -> tuple[str, str]:
+    """(dark, dark) pair — CTK appearance-aware widgets stay dark."""
+    color = str(DARK_THEME.get(key, DARK_THEME["accent"]))
+    return (color, color)
+
+
+def accent_fg() -> tuple[str, str] | str:
+    """Primary fill — dark accent for both CTK appearance slots."""
+    accent = str(DARK_THEME["accent"])
+    return (accent, accent)
+
+
+def accent_gradient_fg() -> tuple[str, str]:
+    """
+    CTK tuple is (light-mode, dark-mode) — not a CSS gradient.
+    Both slots stay Apple blue so Dark appearance never flips to indigo.
+    """
+    accent = str(DARK_THEME["accent"])
+    return (accent, accent)
+
+
 def ui_font(size: int, *, weight: str = "normal") -> ctk.CTkFont:
-    for family in ("Segoe UI Variable", "Segoe UI", "SF Pro Display"):
+    for family in ("Segoe UI Variable", "Segoe UI", "SF Pro Display", "SF Pro Text"):
         try:
             return ctk.CTkFont(family=family, size=size, weight=weight)
         except Exception:
@@ -90,13 +173,20 @@ def ui_font(size: int, *, weight: str = "normal") -> ctk.CTkFont:
     return ctk.CTkFont(size=size, weight=weight)
 
 
-def glass_frame(parent: ctk.CTkBaseClass, *, highlight: bool = False, elevated: bool = False, **kwargs) -> ctk.CTkFrame:
+def glass_frame(
+    parent: ctk.CTkBaseClass,
+    *,
+    highlight: bool = False,
+    elevated: bool = False,
+    **kwargs: Any,
+) -> ctk.CTkFrame:
+    """Simulated Liquid Glass: graphite fill + soft hairline border."""
     if elevated:
-        defaults = {
-            "fg_color": THEME["surface_elevated"],
+        defaults: dict[str, Any] = {
+            "fg_color": THEME["glass_inner"],
             "corner_radius": CORNER_RADIUS,
             "border_width": 1,
-            "border_color": THEME["glass_border_bright"],
+            "border_color": THEME["glass_border"],
         }
     else:
         defaults = {
@@ -109,43 +199,96 @@ def glass_frame(parent: ctk.CTkBaseClass, *, highlight: bool = False, elevated: 
     return ctk.CTkFrame(parent, **defaults)
 
 
-def primary_button(parent: ctk.CTkBaseClass, **kwargs) -> ctk.CTkButton:
-    defaults = {
+def glass_shell(
+    parent: ctk.CTkBaseClass,
+    *,
+    elevated: bool = True,
+    corner_radius: int | None = None,
+    rim: bool = True,
+    **kwargs: Any,
+) -> tuple[ctk.CTkFrame, ctk.CTkFrame]:
+    """
+    Multi-layer glass: outer mist → optional rim hairline → inner graphite.
+    Depth via layered fills and highlight edge — no Gaussian blur.
+    """
+    radius = corner_radius if corner_radius is not None else RADIUS_SHELL
+    outer_kwargs = {
+        k: v for k, v in kwargs.items() if k not in ("fg_color", "border_color", "border_width")
+    }
+    outer = ctk.CTkFrame(
+        parent,
+        fg_color=THEME["glass_outer"],
+        corner_radius=radius,
+        border_width=1,
+        border_color=THEME["glass_border"],
+        **outer_kwargs,
+    )
+    host: ctk.CTkBaseClass = outer
+    pad = 3
+    if rim:
+        rim_frame = ctk.CTkFrame(
+            outer,
+            fg_color=THEME["glass_rim"],
+            corner_radius=max(14, radius - 2),
+            border_width=1,
+            border_color=THEME["glass_edge"],
+        )
+        rim_frame.pack(fill="both", expand=True, padx=2, pady=2)
+        host = rim_frame
+        pad = 2
+    inner = ctk.CTkFrame(
+        host,
+        fg_color=THEME["glass_inner"] if elevated else THEME["glass"],
+        corner_radius=max(12, radius - 6),
+        border_width=1,
+        border_color=THEME["glass_highlight"] if elevated else THEME["glass_edge"],
+    )
+    inner.pack(fill="both", expand=True, padx=pad, pady=pad)
+    return outer, inner
+
+
+def primary_button(parent: ctk.CTkBaseClass, **kwargs: Any) -> ctk.CTkButton:
+    """Premium CTA — solid Apple blue + soft glow edge (CTK has no CSS gradient)."""
+    defaults: dict[str, Any] = {
         "fg_color": THEME["accent"],
         "hover_color": THEME["accent_hover"],
         "text_color": THEME["accent_text"],
-        "corner_radius": 14,
+        "corner_radius": RADIUS_BUTTON,
         "font": ui_font(14, weight="bold"),
-        "height": 42,
-        "border_width": 0,
+        "height": 40,
+        "border_width": 1,
+        "border_color": THEME["accent_glow"],
     }
     defaults.update(kwargs)
     return ctk.CTkButton(parent, **defaults)
 
 
-def secondary_button(parent: ctk.CTkBaseClass, **kwargs) -> ctk.CTkButton:
-    defaults = {
+def secondary_button(parent: ctk.CTkBaseClass, **kwargs: Any) -> ctk.CTkButton:
+    """Elevated chip — soft border, hover lifts surface."""
+    defaults: dict[str, Any] = {
         "fg_color": THEME["chip"],
         "hover_color": THEME["glass_hover"],
         "text_color": THEME["text"],
         "border_width": 1,
         "border_color": THEME["glass_border"],
-        "corner_radius": 14,
-        "font": ui_font(13),
-        "height": 40,
+        "corner_radius": RADIUS_BUTTON,
+        "font": ui_font(13, weight="bold"),
+        "height": 38,
     }
     defaults.update(kwargs)
     return ctk.CTkButton(parent, **defaults)
 
 
-def ghost_button(parent: ctk.CTkBaseClass, **kwargs) -> ctk.CTkButton:
-    defaults = {
+def ghost_button(parent: ctk.CTkBaseClass, **kwargs: Any) -> ctk.CTkButton:
+    """Transparent accent text — soft accent wash on hover."""
+    defaults: dict[str, Any] = {
         "fg_color": "transparent",
-        "hover_color": THEME["chip"],
+        "hover_color": THEME["accent_soft"],
         "text_color": THEME["accent"],
-        "corner_radius": 12,
+        "corner_radius": 14,
         "font": ui_font(13, weight="bold"),
-        "height": 36,
+        "height": 38,
+        "border_width": 0,
     }
     defaults.update(kwargs)
     return ctk.CTkButton(parent, **defaults)
@@ -170,39 +313,11 @@ def status_pill(
         text=text,
         fg_color=bg,
         text_color=fg,
-        corner_radius=10,
-        font=ui_font(11, weight="bold"),
-        height=24,
-        padx=10,
+        corner_radius=12,
+        font=ui_font(TYPE_CAPTION, weight="bold"),
+        height=28,
+        padx=14,
     )
-
-
-def skeleton_card(parent: ctk.CTkBaseClass, *, row: int, col: int) -> ctk.CTkFrame:
-    card = ctk.CTkFrame(
-        parent,
-        fg_color=THEME["surface"],
-        corner_radius=CORNER_RADIUS,
-        border_width=1,
-        border_color=THEME["glass_border"],
-    )
-    card.grid(
-        row=row,
-        column=col,
-        sticky="nsew",
-        padx=(0 if col == 0 else 8, 8 if col == 0 else 0),
-        pady=8,
-    )
-    icon = ctk.CTkFrame(card, fg_color=THEME["skeleton"], corner_radius=14, width=52, height=52)
-    icon.grid(row=0, column=0, rowspan=2, padx=(CARD_PADX, 12), pady=CARD_PADY)
-    icon.grid_propagate(False)
-
-    lines = ctk.CTkFrame(card, fg_color="transparent")
-    lines.grid(row=0, column=1, sticky="ew", pady=(CARD_PADY, 4), padx=(0, CARD_PADX))
-    ctk.CTkFrame(lines, fg_color=THEME["skeleton_shine"], corner_radius=6, height=14, width=150).pack(
-        anchor="w", pady=(6, 8)
-    )
-    ctk.CTkFrame(lines, fg_color=THEME["skeleton"], corner_radius=6, height=10, width=96).pack(anchor="w")
-    return card
 
 
 def empty_state(
@@ -215,53 +330,66 @@ def empty_state(
     action: object | None = None,
 ) -> ctk.CTkFrame:
     wrap = ctk.CTkFrame(parent, fg_color="transparent")
-    wrap.pack(fill="x", padx=24, pady=48)
+    wrap.pack(fill="x", padx=32, pady=64)
 
-    badge = ctk.CTkFrame(wrap, fg_color=THEME["accent_soft"], corner_radius=28, width=64, height=64)
+    badge = ctk.CTkFrame(wrap, fg_color=THEME["accent_soft"], corner_radius=36, width=72, height=72)
     badge.pack(anchor="w")
     badge.pack_propagate(False)
     ctk.CTkLabel(
         badge,
         text=icon,
-        font=ui_font(22, weight="bold"),
+        font=ui_font(26, weight="bold"),
         text_color=THEME["accent"],
     ).place(relx=0.5, rely=0.5, anchor="center")
 
     ctk.CTkLabel(
         wrap,
         text=title,
-        font=ui_font(20, weight="bold"),
+        font=ui_font(22, weight="bold"),
         text_color=THEME["text"],
         anchor="w",
         justify="left",
-    ).pack(anchor="w", pady=(18, 0))
+    ).pack(anchor="w", pady=(22, 0))
     if hint:
         ctk.CTkLabel(
             wrap,
             text=hint,
-            font=ui_font(14),
+            font=ui_font(TYPE_BODY),
             text_color=THEME["muted"],
             anchor="w",
             justify="left",
             wraplength=480,
-        ).pack(anchor="w", pady=(8, 0))
+        ).pack(anchor="w", pady=(10, 0))
     if action_text and callable(action):
-        primary_button(wrap, text=action_text, command=action, width=180).pack(anchor="w", pady=(18, 0))
+        primary_button(wrap, text=action_text, command=action, width=188).pack(
+            anchor="w", pady=(22, 0)
+        )
     return wrap
 
 
-def icon_badge(parent: ctk.CTkBaseClass, glyph: str, *, size: int = 48, tone: str = "accent") -> ctk.CTkFrame:
+def icon_badge(
+    parent: ctk.CTkBaseClass, glyph: str, *, size: int = 52, tone: str = "accent"
+) -> ctk.CTkFrame:
     tones = {
         "accent": (THEME["accent_soft"], THEME["accent"]),
         "neutral": (THEME["chip"], THEME["text_secondary"]),
         "success": (THEME["success_soft"], THEME["success"]),
     }
     bg, fg = tones.get(tone, tones["accent"])
-    frame = ctk.CTkFrame(parent, fg_color=bg, corner_radius=14, width=size, height=size)
+    frame = ctk.CTkFrame(parent, fg_color=bg, corner_radius=18, width=size, height=size)
     frame.pack_propagate(False)
     frame.grid_propagate(False)
     ctk.CTkLabel(frame, text=glyph, font=ui_font(int(size * 0.38), weight="bold"), text_color=fg).place(
         relx=0.5, rely=0.5, anchor="center"
     )
     return frame
-
+
+
+def theme_mode_label(preference: str | None = None) -> str:
+    _ = preference
+    return "Тёмная"
+
+
+def theme_mode_from_label(label: str) -> str:
+    _ = label
+    return "dark"

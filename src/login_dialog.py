@@ -123,11 +123,13 @@ class AppleLoginDialog(ctk.CTkToplevel):
         self.hint_label = ctk.CTkLabel(
             body,
             text="1. Введите email и пароль → «Войти» (поле кода пока пустое).\n"
-            "2. Если Apple запросит 2FA — код придёт уведомлением на доверенный "
-            "iPhone/iPad/Mac (реже SMS). Это не email.\n"
-            "3. Введите 6 цифр сразу (~30 сек) → снова «Войти».\n"
-            "4. Если вместо кода видите ошибку — код не отправлялся: проверьте "
-            "пароль и подождите пару минут.",
+            "2. Запрос кода ≠ гарантия push: при опечатке в email/пароле код "
+            "не приходит, хотя приложение просит 2FA.\n"
+            "3. При верных данных — уведомление на доверенный iPhone/Mac, "
+            "либо Настройки → Apple ID → Получить код проверки (не email/SMS).\n"
+            "4. Введите 6 цифр сразу (~30 сек) → снова «Войти».\n"
+            "5. HTML/«hex digit» ошибки — Apple отклонил вход до 2FA: подождите "
+            "2–5 минут.",
             wraplength=420,
             justify="left",
             text_color=THEME["muted"],
@@ -166,7 +168,7 @@ class AppleLoginDialog(ctk.CTkToplevel):
         self.email_entry.focus_set()
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
-        self.status_label.configure(text=text, text_color=("#CC3333", "#FF6B6B") if error else THEME["muted"])
+        self.status_label.configure(text=text, text_color=THEME["error"] if error else THEME["muted"])
 
     def _submit(self) -> None:
         email = self.email_entry.get().strip()
