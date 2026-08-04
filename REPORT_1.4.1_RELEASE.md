@@ -2,7 +2,8 @@
 
 **Дата:** 2026-08-04  
 **Репозиторий:** morgunartem28-netizen/gromov-restore-plus  
-**Статус:** готов к публикации / опубликован после smoke-gate
+**Статус:** опубликован  
+**Release URL:** https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/tag/1.4.1
 
 ## Корневая причина предыдущего 1.4.1
 
