@@ -1,7 +1,7 @@
 ; GROMOV Restore+ — installer script for Inno Setup 6
 
 #define MyAppName "GROMOV Restore+"
-#define MyAppVersion "1.4.0"
+#define MyAppVersion "1.4.1"
 #define MyAppPublisher "GROMOV"
 #define MyAppExeName "GROMOV-RestorePlus.exe"
 
@@ -23,6 +23,8 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
+CloseApplications=yes
+RestartApplications=no
 ArchitecturesInstallIn64BitMode=x64
 
 [Languages]
@@ -33,11 +35,11 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 
 [Files]
 ; Entire PyInstaller tree — must already contain tools\ and drivers\ (build_release.ps1 copies them).
-Source: "..\dist\GROMOV-RestorePlus\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\GROMOV-RestorePlus\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs restartreplace
 
 ; Explicit copies so a missing folder fails the build instead of shipping a broken Setup.
-Source: "..\dist\GROMOV-RestorePlus\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\dist\GROMOV-RestorePlus\drivers\*"; DestDir: "{app}\drivers"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\GROMOV-RestorePlus\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion recursesubdirs createallsubdirs restartreplace
+Source: "..\dist\GROMOV-RestorePlus\drivers\*"; DestDir: "{app}\drivers"; Flags: ignoreversion recursesubdirs createallsubdirs restartreplace
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
