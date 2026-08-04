@@ -1,13 +1,13 @@
 {
-  "version": "1.4.1",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
+  "version": "1.4.0",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
   "setup_urls": [
-    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
-    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
-    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
-    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe",
-    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.1/GROMOV-RestorePlus-Setup.exe"
+    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
+    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
+    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
+    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe",
+    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.0/GROMOV-RestorePlus-Setup.exe"
   ],
-  "sha256": "58c8da74d95837305b2ab7042e2aa2d91947f260cff44c2a6d562925e959cb14",
-  "notes": "🚀 Что нового в обновлении\n\n— 🔧 Исправлена установка обновления и проверка целостности встроенных инструментов.\n\nСпасибо, что пользуетесь **GROMOV Restore+**! 💙"
+  "sha256": "22684712f6239699dbf877460dcb229bf325529872b53e5ea31bb7dec8247084",
+  "notes": "Ускорили работу, добавили Т-Банк и освежили дизайн интерфейса."
 }
