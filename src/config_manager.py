@@ -195,7 +195,7 @@ class ConfigManager:
         return path
 
     _APP_ID_FIXES: dict[str, int] = {
-        # Раньше ошибочно стоял ID Облака Mail вместо Почты.
+        # Раньше ошибочно стоял ID Облака Mail (696551382) вместо Почты.
         "mailru": 511310430,
     }
 

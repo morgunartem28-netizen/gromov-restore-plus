@@ -56,6 +56,17 @@
       "aliases": ["mail", "mail.ru", "почта"]
     },
     {
+      "id": "mailru-cloud",
+      "title": "Облако Mail.ru",
+      "bundleId": "ru.mail.cloud",
+      "appId": 696551382,
+      "description": "Облачное хранилище Mail.ru (Cloud Mail.Ru)",
+      "iconUrl": "",
+      "iconFile": "mailru-cloud.png",
+      "aliases": ["облако", "cloud", "cloud mail", "mailru cloud", "диск"],
+      "addedAt": "2026-08-04"
+    },
+    {
       "id": "rutube",
       "title": "Rutube",
       "bundleId": "ru.rutube.main",

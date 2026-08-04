@@ -15,6 +15,73 @@ from security_utils import mask_email
 
 PhaseCallback = Callable[[str, float, str], None]
 
+# Overall job bar: prepare → auth → download bytes → verify → transfer/install → done.
+_AUTH_BAR_START = 0.08
+_AUTH_BAR_CAP = 0.11
+_DOWNLOAD_BAR_START = 0.12
+_DOWNLOAD_BAR_END = 0.55
+# When Content-Length is unknown, half of the download band at ~180 MB.
+_UNKNOWN_SIZE_HALF_BYTES = 180 * 1024 * 1024
+
+
+def map_download_progress(downloaded: int, *, known_total: int | None = None) -> float:
+    """Map downloaded bytes into the download segment of the overall progress bar."""
+    downloaded = max(0, int(downloaded))
+    span = _DOWNLOAD_BAR_END - _DOWNLOAD_BAR_START
+    if known_total is not None and known_total > 0:
+        ratio = min(1.0, downloaded / known_total)
+        return _DOWNLOAD_BAR_START + span * ratio
+    # Asymptotic toward the end of the band; finalize bumps to _DOWNLOAD_BAR_END.
+    ratio = downloaded / (downloaded + _UNKNOWN_SIZE_HALF_BYTES) if downloaded else 0.0
+    return _DOWNLOAD_BAR_START + span * ratio * 0.92
+
+
+def pick_download_artifact(downloads_dir: Path, app_id: int) -> tuple[Path | None, bool]:
+    """Newest ipatool artifact for app_id.
+
+    ipatool writes ``{id}_*.ipa.tmp`` while downloading, then renames to ``.ipa``.
+    Returns ``(path, is_temp)``.
+    """
+    app_id_text = str(app_id)
+    tmps: list[Path] = []
+    finals: list[Path] = []
+    for pattern in (
+        f"{app_id_text}_*.ipa.tmp",
+        f"*_{app_id_text}_*.ipa.tmp",
+        f"{app_id_text}_*.ipa",
+        f"*_{app_id_text}_*.ipa",
+    ):
+        for path in downloads_dir.glob(pattern):
+            try:
+                if not path.is_file():
+                    continue
+            except OSError:
+                continue
+            name = path.name.lower()
+            if name.endswith(".ipa.tmp"):
+                tmps.append(path)
+            elif name.endswith(".ipa"):
+                finals.append(path)
+
+    def newest(paths: list[Path]) -> Path | None:
+        if not paths:
+            return None
+        return max(paths, key=lambda item: item.stat().st_mtime)
+
+    tmp = newest(tmps)
+    if tmp is not None:
+        return tmp, True
+    final = newest(finals)
+    if final is not None:
+        return final, False
+    return None, False
+
+
+def format_download_size(num_bytes: int) -> str:
+    if num_bytes < 1024 * 1024:
+        return f"{max(1, num_bytes // 1024)} КБ"
+    return f"{num_bytes / (1024 * 1024):.0f} МБ"
+
 
 def run_install_job(
     *,
@@ -47,24 +114,41 @@ def run_install_job(
         phase("download", 0.45, "Приложение уже скачано")
     else:
         ensure_download_space(downloads_dir)
-        phase("download", 0.15, f"Получение «{app.maskTitle or app.title}»...")
+        title = app.maskTitle or app.title
+        phase("download", _AUTH_BAR_START, f"Запрос лицензии «{title}»...")
         stop_poll = threading.Event()
         max_bytes = [0]
+        auth_started = time.monotonic()
 
         def poll() -> None:
             while not stop_poll.is_set():
-                candidates = sorted(
-                    downloads_dir.glob(f"{app.appId}_*.ipa"),
-                    key=lambda path: path.stat().st_mtime,
-                    reverse=True,
-                )
-                if candidates:
-                    size = candidates[0].stat().st_size
-                    max_bytes[0] = max(max_bytes[0], size)
-                    size_mb = max_bytes[0] / (1024 * 1024)
-                    value = min(0.55, 0.15 + (max_bytes[0] / (850 * 1024 * 1024)) * 0.4)
-                    phase("download", value, f"Получение... ({size_mb:.0f} МБ)")
-                time.sleep(0.5)
+                try:
+                    artifact, is_temp = pick_download_artifact(downloads_dir, app.appId)
+                    if artifact is None:
+                        # Auth / purchase / CDN handshake — no .tmp yet.
+                        elapsed = time.monotonic() - auth_started
+                        creep = min(_AUTH_BAR_CAP, _AUTH_BAR_START + elapsed * 0.003)
+                        phase("download", creep, f"Запрос лицензии «{title}»...")
+                    else:
+                        try:
+                            size = artifact.stat().st_size
+                        except OSError:
+                            size = 0
+                        max_bytes[0] = max(max_bytes[0], size)
+                        size_label = format_download_size(max_bytes[0])
+                        if is_temp:
+                            value = map_download_progress(max_bytes[0])
+                            phase("download", value, f"Получение... ({size_label})")
+                        else:
+                            # Rename finished — bytes are complete for this job.
+                            phase(
+                                "download",
+                                _DOWNLOAD_BAR_END,
+                                f"Файл получен ({size_label})",
+                            )
+                except IpatoolCancelled:
+                    return
+                time.sleep(0.4)
 
         poller = threading.Thread(target=poll, daemon=True)
         poller.start()

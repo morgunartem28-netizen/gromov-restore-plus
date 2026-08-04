@@ -88,6 +88,9 @@
     "втб": ["vtb", "sirius", "сириус"],
     "vtb": ["втб", "sirius", "сириус"],
     "mail": ["mail.ru", "почта"],
-    "почта": ["mail.ru", "mailru"]
+    "почта": ["mail.ru", "mailru"],
+    "облако": ["mail.ru", "mailru-cloud", "cloud", "cloud mail"],
+    "cloud": ["облако", "mailru-cloud", "cloud mail"],
+    "mailru cloud": ["облако", "mailru-cloud"]
   }
 }
