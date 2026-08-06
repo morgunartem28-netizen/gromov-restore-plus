@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -134,6 +135,7 @@ class ConfigManager:
         self._apps_cache_key: tuple[float, float, float, float] | None = None
         self._catalog_cfg_cache: dict | None = None
         self._catalog_cfg_mtime: float = 0.0
+        self._account_lock = threading.RLock()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.downloads_root.mkdir(parents=True, exist_ok=True)
         self._ensure_user_config()
@@ -161,11 +163,13 @@ class ConfigManager:
 
     @property
     def apple_account_email(self) -> str | None:
-        return self._apple_account_email
+        with self._account_lock:
+            return self._apple_account_email
 
     def set_apple_account(self, email: str | None) -> None:
         normalized = (email or "").strip().lower()
-        self._apple_account_email = normalized or None
+        with self._account_lock:
+            self._apple_account_email = normalized or None
 
     @staticmethod
     def account_dir_name(email: str) -> str:

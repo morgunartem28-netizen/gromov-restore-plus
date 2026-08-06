@@ -77,6 +77,27 @@ class BatchListStabilityTests(unittest.TestCase):
         b.reset([1, 2, 3], token=2)
         self.assertEqual(len(host._parent_canvas._binds), binds_after_first)
 
+    def test_max_rendered_soft_cap(self) -> None:
+        host = _FakeHost()
+        rendered: list[int] = []
+
+        def render(item: int, _index: int) -> None:
+            rendered.append(item)
+
+        batch = BatchCatalogList(
+            host,
+            render_item=render,
+            batch_size=10,
+            max_rendered=25,
+        )  # type: ignore[arg-type]
+        batch.reset(list(range(100)), token=1)
+        # First batch is 10; keep calling load_more until soft cap.
+        while not batch.state.capped and batch.state.rendered < 25:
+            batch.load_more()
+        self.assertEqual(len(rendered), 25)
+        self.assertTrue(batch.state.capped)
+        self.assertFalse(batch.is_complete)
+
     def test_default_batch_constant(self) -> None:
         self.assertEqual(DEFAULT_BATCH, 40)
 

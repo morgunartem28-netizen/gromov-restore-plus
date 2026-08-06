@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +20,7 @@ class AppSettings:
     def __init__(self) -> None:
         self.path = data_dir() / "settings.json"
         self._data = self._load()
+        self._lock = threading.RLock()
 
     def _load(self) -> dict:
         if not self.path.exists():
@@ -30,8 +32,13 @@ class AppSettings:
             return {}
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
+        """Persist settings. Safe to call from UI or bg — serialized by lock."""
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(
+                json.dumps(self._data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     @property
     def ipa_cache_days(self) -> int:

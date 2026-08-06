@@ -209,13 +209,20 @@ class DeviceInstaller:
         from go-ios are ignored so installs never target a phone on the LAN.
         """
         if self.go_ios_path:
-            completed = run_hidden(
-                [self.go_ios_path, "list", "--details"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
+            try:
+                completed = run_hidden(
+                    [self.go_ios_path, "list", "--details"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=12,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise DeviceInstallerError(
+                    "Не удалось получить список USB-устройств (таймаут).\n"
+                    "Подключите iPhone кабелем, разблокируйте и нажмите «Доверять»."
+                ) from exc
             if completed.returncode != 0:
                 # Plain list has no ConnectionType — unsafe for USB-only installs.
                 # Do not fall back to it when usb_only=True (would include Wi-Fi).
@@ -224,13 +231,20 @@ class DeviceInstaller:
                         "Не удалось получить список USB-устройств.\n"
                         "Подключите iPhone кабелем, разблокируйте и нажмите «Доверять»."
                     )
-                plain = run_hidden(
-                    [self.go_ios_path, "list"],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
+                try:
+                    plain = run_hidden(
+                        [self.go_ios_path, "list"],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=12,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise DeviceInstallerError(
+                        "Не удалось получить список USB-устройств (таймаут).\n"
+                        "Подключите iPhone кабелем, разблокируйте и нажмите «Доверять»."
+                    ) from exc
                 if plain.returncode != 0:
                     raise DeviceInstallerError((completed.stderr or completed.stdout or plain.stderr or "").strip())
                 try:

@@ -278,7 +278,7 @@ if ($iscc) {
                 "https://ghfast.top/$setupUrl"
             )
             sha256     = $sha
-            notes      = "Ускорили работу, добавили Т-Банк, освежили дизайн и исправили установку обновления / проверку целостности инструментов."
+            notes      = "Одна установка за раз, без зависаний USB и «Установить», исправлена отмена и прогресс, быстрее иконки."
         }
         $manifestPath = Join-Path $root "release\version.json"
         $json = ($manifest | ConvertTo-Json -Depth 5)

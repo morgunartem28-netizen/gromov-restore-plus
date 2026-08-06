@@ -73,6 +73,22 @@ class CatalogController:
         self.state.view = "root"
         self.state.bank_group_id = None
 
+    def set_view(self, view: Literal["root", "bank"], *, bank_group_id: str | None = None) -> None:
+        """Set catalog drill-down view (root list vs bank group)."""
+        if view == "bank":
+            self.state.view = "bank"
+            self.state.bank_group_id = bank_group_id
+            self.state.tab_id = "banks"
+        else:
+            self.state.view = "root"
+            self.state.bank_group_id = None
+
+    def set_bank_group(self, bank_group_id: str | None) -> None:
+        if bank_group_id:
+            self.set_view("bank", bank_group_id=bank_group_id)
+        else:
+            self.set_view("root")
+
     def set_search(self, query: str, *, scope: SearchScope | None = None) -> None:
         self.state.search_query = ConfigManager.normalize_search_text(query)
         if scope is not None:

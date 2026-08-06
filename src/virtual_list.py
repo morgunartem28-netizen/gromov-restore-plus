@@ -13,6 +13,9 @@ import customtkinter as ctk
 
 
 DEFAULT_BATCH = 40
+# Soft cap for Tk widgets in one panel (foundation for 500+ catalogs).
+# Beyond this, further scroll loads stop; search/tabs still work.
+DEFAULT_MAX_RENDERED = 400
 SCROLL_LOAD_THRESHOLD = 0.82
 _HOST_BATCH_ATTR = "_gromov_active_batch"
 _HOST_BOUND_ATTR = "_gromov_batch_scroll_bound"
@@ -23,9 +26,11 @@ class VirtualListState:
     items: list[Any] = field(default_factory=list)
     rendered: int = 0
     batch_size: int = DEFAULT_BATCH
+    max_rendered: int = DEFAULT_MAX_RENDERED
     loading: bool = False
     token: int = 0
     cancelled: bool = False
+    capped: bool = False
 
 
 class BatchCatalogList:
@@ -37,21 +42,25 @@ class BatchCatalogList:
         *,
         render_item: Callable[[Any, int], None],
         batch_size: int = DEFAULT_BATCH,
+        max_rendered: int = DEFAULT_MAX_RENDERED,
         on_complete: Callable[[], None] | None = None,
     ) -> None:
         self.host = host
         self.render_item = render_item
         self.batch_size = max(10, batch_size)
+        self.max_rendered = max(self.batch_size, max_rendered)
         self.on_complete = on_complete
-        self.state = VirtualListState(batch_size=self.batch_size)
+        self.state = VirtualListState(batch_size=self.batch_size, max_rendered=self.max_rendered)
 
     def reset(self, items: list[Any], *, token: int) -> None:
         self.state = VirtualListState(
             items=list(items),
             rendered=0,
             batch_size=self.batch_size,
+            max_rendered=self.max_rendered,
             token=token,
             cancelled=False,
+            capped=False,
         )
         # Only the latest batch list receives scroll events for this host.
         setattr(self.host, _HOST_BATCH_ATTR, self)
@@ -91,7 +100,12 @@ class BatchCatalogList:
         self.host.after(16, self._maybe_load)
 
     def _maybe_load(self) -> None:
-        if self.state.cancelled or self.state.loading or self.state.rendered >= len(self.state.items):
+        if (
+            self.state.cancelled
+            or self.state.capped
+            or self.state.loading
+            or self.state.rendered >= len(self.state.items)
+        ):
             return
         if getattr(self.host, _HOST_BATCH_ATTR, None) is not self:
             return
@@ -108,7 +122,7 @@ class BatchCatalogList:
             self.load_more()
 
     def load_more(self) -> None:
-        if self.state.cancelled or self.state.loading:
+        if self.state.cancelled or self.state.loading or self.state.capped:
             return
         if getattr(self.host, _HOST_BATCH_ATTR, None) is not self:
             return
@@ -116,9 +130,18 @@ class BatchCatalogList:
             if self.on_complete and not self.state.cancelled:
                 self.on_complete()
             return
+        if self.state.rendered >= self.state.max_rendered:
+            # Soft cap — do not mark panel complete (avoids caching a truncated list).
+            self.state.capped = True
+            self.state.loading = False
+            return
         self.state.loading = True
         token = self.state.token
-        end = min(self.state.rendered + self.state.batch_size, len(self.state.items))
+        end = min(
+            self.state.rendered + self.state.batch_size,
+            len(self.state.items),
+            self.state.max_rendered,
+        )
         for index in range(self.state.rendered, end):
             if self.state.cancelled or token != self.state.token:
                 break
@@ -133,15 +156,23 @@ class BatchCatalogList:
             if self.on_complete:
                 self.on_complete()
             return
+        if self.state.rendered >= self.state.max_rendered:
+            self.state.capped = True
+            return
         # If content still doesn't fill the viewport, keep loading.
         self.host.after(50, self._maybe_load)
 
     @property
     def remaining(self) -> int:
-        if self.state.cancelled:
+        if self.state.cancelled or self.state.capped:
             return 0
         return max(0, len(self.state.items) - self.state.rendered)
 
     @property
     def is_complete(self) -> bool:
-        return (not self.state.cancelled) and self.state.rendered >= len(self.state.items) and len(self.state.items) >= 0
+        return (
+            (not self.state.cancelled)
+            and (not self.state.capped)
+            and self.state.rendered >= len(self.state.items)
+            and len(self.state.items) >= 0
+        )

@@ -83,6 +83,30 @@ def format_download_size(num_bytes: int) -> str:
     return f"{num_bytes / (1024 * 1024):.0f} МБ"
 
 
+def clear_tool_cancels_unless_stopped(
+    cancel_event: threading.Event | None,
+    *tools: object,
+) -> None:
+    """Clear per-tool cancel flags for a new job without wiping a racing user Cancel.
+
+    TOCTOU: user Cancel between ``is_set()`` and ``clear_cancel()`` would otherwise
+    erase freshly set tool flags and let download/install continue after «Отмена».
+    After clear, re-check the shared queue event; if set, re-assert tool cancels and abort.
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        raise IpatoolCancelled("Операция отменена.")
+    for tool in tools:
+        clear = getattr(tool, "clear_cancel", None)
+        if callable(clear):
+            clear()
+    if cancel_event is not None and cancel_event.is_set():
+        for tool in tools:
+            request = getattr(tool, "request_cancel", None)
+            if callable(request):
+                request()
+        raise IpatoolCancelled("Операция отменена.")
+
+
 def run_install_job(
     *,
     app: AppEntry,
@@ -93,10 +117,24 @@ def run_install_job(
     on_phase: PhaseCallback | None = None,
     cancel_event: threading.Event | None = None,
 ) -> None:
+    # Throttle identical / near-identical UI callbacks (disk poll can fire ~2 Hz).
+    _last_phase: list[tuple[str, float, str, float]] = [("", -1.0, "", 0.0)]
+
     def phase(name: str, value: float, text: str) -> None:
         if cancel_event and cancel_event.is_set():
             raise IpatoolCancelled("Операция отменена.")
         if on_phase:
+            now = time.monotonic()
+            prev_name, prev_val, prev_text, prev_at = _last_phase[0]
+            same = (
+                name == prev_name
+                and text == prev_text
+                and abs(value - prev_val) < 0.008
+                and (now - prev_at) < 0.15
+            )
+            if same:
+                return
+            _last_phase[0] = (name, value, text, now)
             on_phase(name, value, text)
 
     if not config_manager.apple_account_email:
@@ -148,17 +186,13 @@ def run_install_job(
                             )
                 except IpatoolCancelled:
                     return
-                time.sleep(0.4)
+                # 0.7s is enough for a smooth bar without flooding Tk with after(0).
+                time.sleep(0.7)
 
         poller = threading.Thread(target=poll, daemon=True)
         poller.start()
         try:
-            # Do not clear cancel flags if the queue already requested cancel.
-            if cancel_event is not None and cancel_event.is_set():
-                raise IpatoolCancelled("Операция отменена.")
-            if cancel_event is None or not cancel_event.is_set():
-                ipatool.clear_cancel()
-                device_installer.clear_cancel()
+            clear_tool_cancels_unless_stopped(cancel_event, ipatool, device_installer)
             ipa_path = ipatool.download(
                 app_id=app.appId,
                 bundle_id=app.bundleId,

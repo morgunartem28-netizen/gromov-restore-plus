@@ -1,95 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-import traceback
 import webbrowser
 from pathlib import Path
 from typing import Callable
 
 # --- Startup crash diagnostics (stdlib only; must stay before heavy imports) ---
+from startup_crash import install_startup_excepthook
 
-
-def _startup_crash_log_path() -> Path:
-    """Always LocalAppData — works even if install dir is read-only / broken."""
-    base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "GROMOV" / "RestorePlus"
-    try:
-        base.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        base = Path(tempfile.gettempdir()) / "GROMOV-RestorePlus"
-        try:
-            base.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            return Path(tempfile.gettempdir()) / "gromov_restoreplus_startup_crash.log"
-    return base / "startup_crash.log"
-
-
-def _write_startup_crash(exc: BaseException) -> Path:
-    path = _startup_crash_log_path()
-    version = "unknown"
-    try:
-        from version import APP_VERSION as _ver  # local import — may itself be failing
-
-        version = str(_ver)
-    except Exception:
-        pass
-    lines = [
-        f"time={time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"version={version}",
-        f"frozen={bool(getattr(sys, 'frozen', False))}",
-        f"executable={sys.executable}",
-        f"argv={sys.argv!r}",
-        f"cwd={os.getcwd()}",
-        f"exception={type(exc).__name__}: {exc}",
-        "",
-        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-    ]
-    try:
-        path.write_text("\n".join(lines), encoding="utf-8")
-    except OSError:
-        pass
-    return path
-
-
-def _show_startup_crash_dialog(path: Path, exc: BaseException) -> None:
-    try:
-        import tkinter as tk
-        from tkinter import messagebox
-
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror(
-            "GROMOV Restore+",
-            "Не удалось запустить приложение.\n\n"
-            f"{type(exc).__name__}: {exc}\n\n"
-            f"Подробности сохранены в:\n{path}\n\n"
-            "Отправьте этот файл в Telegram @gromov_restore.",
-        )
-        root.destroy()
-    except Exception:
-        pass
-
-
-def _install_startup_excepthook() -> None:
-    """PyInstaller console=False hides stderr — persist uncaught errors to disk."""
-
-    def _hook(exc_type: type[BaseException], exc: BaseException, tb: object) -> None:
-        if issubclass(exc_type, (SystemExit, KeyboardInterrupt)):
-            sys.__excepthook__(exc_type, exc, tb)  # type: ignore[arg-type]
-            return
-        path = _write_startup_crash(exc)
-        _show_startup_crash_dialog(path, exc)
-        sys.__excepthook__(exc_type, exc, tb)  # type: ignore[arg-type]
-
-    sys.excepthook = _hook
-
-
-_install_startup_excepthook()
+install_startup_excepthook()
 
 import tkinter as tk
 from tkinter import messagebox
@@ -121,9 +46,11 @@ from device_picker import pick_usb_device
 from disk_utils import DiskSpaceError, ensure_download_space
 from driver_installer import DriverInstallerError, apple_drivers_installed, install_apple_drivers
 from icon_loader import IconLoader
-from install_controller import InstallController
+from install_controller import BUSY_OTHER_APP_MSG, InstallController
+from install_dialogs import show_fairplay_launch_checklist
 from install_queue import InstallJob, JobStatus
-from install_service import run_install_job
+from install_service import clear_tool_cancels_unless_stopped, run_install_job
+from progress_ui import ProgressUICoalescer
 from ipa_utils import purge_stale_ipa_cache, purge_stale_staging
 from ipatool_client import IpatoolCancelled, IpatoolClient, IpatoolError
 from login_dialog import AppleLoginDialog
@@ -158,6 +85,7 @@ from ui_animations import (
     bind_press_feedback,
     fade_in_window,
 )
+from update_dialogs import show_update_action_dialog
 from update_controller import UpdateController
 from update_checker import (
     UpdateCancelled,
@@ -170,6 +98,8 @@ from user_errors import friendly_error
 from virtual_list import BatchCatalogList, DEFAULT_BATCH
 from version import APP_VERSION
 from window_effects import apply_glass_window
+
+logger = logging.getLogger("gromov.main")
 
 _SUPPORT_TELEGRAM = "https://t.me/gromov_restore"
 _SUPPORT_TELEGRAM_APP = "tg://resolve?domain=gromov_restore"
@@ -214,24 +144,24 @@ class RestoreIosApp(ctk.CTk):
         self._selected_udid: str | None = self.settings.selected_udid
         self._worker: threading.Thread | None = None
         self._async_busy = False
+        self._async_jobs: dict[str, threading.Thread] = {}
         self._icon_refs: list[object] = []
         self._selected_icon_ref: object | None = None
+        self._selected_icon_token = 0
         self._app_rows: dict[str, ctk.CTkFrame] = {}
         self._catalog_panels: dict[str, ctk.CTkFrame] = {}
         self._catalog_panel_rows: dict[str, dict[str, ctk.CTkFrame]] = {}
         self._catalog_panel_complete: dict[str, bool] = {}
         self._catalog_parent: ctk.CTkFrame | None = None
-        self._catalog_view = "root"  # root | bank (drill-down from Banks tab)
-        self._catalog_tab = "popular"
-        self._catalog_bank_group: str | None = None
+        # Catalog navigation SoT is catalog.state — thin property mirrors below.
         self._bank_search_query = ""
-        self._global_search_query = ""
         self._batch_list: BatchCatalogList | None = None
         self._catalog_state_path = data_dir() / "catalog_state.json"
         self._catalog_ready = False
         self._catalog_anim_token = 0
         self._catalog_tabs = None
         self._tabs_wrap: ctk.CTkFrame | None = None
+        self._usb_refresh_gen = 0
         self._cancel_install_btn: ctk.CTkButton | None = None
         self._retry_install_btn: ctk.CTkButton | None = None
         self._install_card_state = "idle"
@@ -241,7 +171,7 @@ class RestoreIosApp(ctk.CTk):
         self._phase_labels: dict[str, ctk.CTkLabel] = {}
         self._phase_order = [key for key, _ in _INSTALL_PHASES]
         self._anim = AnimationRunner(self)
-        self._search_debouncer = SearchDebouncer(self, delay_ms=250, callback=self._apply_bank_search)
+        self._search_debouncer = SearchDebouncer(self, delay_ms=350, callback=self._apply_bank_search)
         self._log_visible = False
         self._version_click_count = 0
         self._toasts: ToastHost | None = None
@@ -256,6 +186,13 @@ class RestoreIosApp(ctk.CTk):
         self._install_queue = self._install.queue  # compat for existing call sites
         self._queue_seen: dict[str, str] = {}
         self._fairplay_checklist_pending = False
+        self._progress_ui = ProgressUICoalescer(
+            after=self.after,
+            after_cancel=self.after_cancel,
+            apply=self._apply_progress_ui,
+        )
+        # Bumped on cancel / new prepare so stale bg prepare callbacks abort.
+        self._install_prepare_gen = 0
 
         self._build_layout()
         self._toasts = ToastHost(self)
@@ -269,6 +206,42 @@ class RestoreIosApp(ctk.CTk):
         self.after(2500, self._purge_stale_caches)
         self.after(800, self._first_run_driver_nudge)
         self.after(5000, self._poll_usb_devices)
+
+    # --- Catalog SoT: catalog.state owns tab / view / bank / search ---
+    @property
+    def _catalog_tab(self) -> str:
+        return self.catalog.state.tab_id
+
+    @_catalog_tab.setter
+    def _catalog_tab(self, value: str) -> None:
+        self.catalog.state.tab_id = value
+
+    @property
+    def _catalog_view(self) -> str:
+        return self.catalog.state.view
+
+    @_catalog_view.setter
+    def _catalog_view(self, value: str) -> None:
+        if value == "bank":
+            self.catalog.state.view = "bank"
+        else:
+            self.catalog.state.view = "root"
+
+    @property
+    def _catalog_bank_group(self) -> str | None:
+        return self.catalog.state.bank_group_id
+
+    @_catalog_bank_group.setter
+    def _catalog_bank_group(self, value: str | None) -> None:
+        self.catalog.state.bank_group_id = value
+
+    @property
+    def _global_search_query(self) -> str:
+        return self.catalog.state.search_query
+
+    @_global_search_query.setter
+    def _global_search_query(self, value: str) -> None:
+        self.catalog.state.search_query = value or ""
 
     def _set_window_icon(self) -> None:
         icon_path = resource_dir() / "assets" / "icon.ico"
@@ -1047,8 +1020,14 @@ class RestoreIosApp(ctk.CTk):
         self.device_installer.request_cancel()
 
     def _queue_progress_hook(self, phase: str, value: float, text: str) -> None:
-        self.after(0, lambda: self._set_progress(text, value))
-        self.after(0, lambda: self._mark_phase(phase, active=True, done=phase == "done"))
+        """Worker → UI: schedule coalesce on the Tk thread only."""
+        self.after(0, lambda p=phase, v=value, t=text: self._progress_ui.coalesce(p, v, t))
+
+    def _apply_progress_ui(self, phase: str, value: float, text: str) -> None:
+        """UI-thread only — apply throttled progress to card/phases."""
+        self._install.apply_phase(phase)
+        self._set_progress(text, value)
+        self._mark_phase(phase, active=True, done=phase == "done")
 
     def _queue_worker(self, job: InstallJob, progress) -> None:
         if not self.ipatool:
@@ -1077,11 +1056,11 @@ class RestoreIosApp(ctk.CTk):
                 self.after(0, lambda t=text: self._log(t))
             progress(phase, value, text)
 
-        # Never clear cancel flags if the queue already requested cancel.
-        if self._install_queue.cancel_event.is_set():
-            raise IpatoolCancelled("Операция отменена.")
-        self.ipatool.clear_cancel()
-        self.device_installer.clear_cancel()
+        clear_tool_cancels_unless_stopped(
+            self._install_queue.cancel_event,
+            self.ipatool,
+            self.device_installer,
+        )
         run_install_job(
             app=job.app,
             ipatool=self.ipatool,
@@ -1148,6 +1127,7 @@ class RestoreIosApp(ctk.CTk):
                 JobStatus.PENDING.value,
                 None,
             ):
+                self._install.note_cancelled()
                 self._toast(f"Отменено: {title}", kind="info")
                 self._log(f"Отменено: {title}")
 
@@ -1162,32 +1142,28 @@ class RestoreIosApp(ctk.CTk):
         self._sync_install_card()
 
     def _show_fairplay_launch_checklist(self) -> None:
-        account = self.config_manager.apple_account_email or ""
-        masked = mask_email(account) if account else "тот же, что в GROMOV"
-        messagebox.showinfo(
-            "Чтобы приложение открылось",
-            "Установка прошла. Открытие на iPhone проверяет лицензию FairPlay.\n\n"
-            f"Важно: аккаунт на телефоне должен совпадать с GROMOV ({masked}) "
-            "ДО установки. Смена «Медиа и покупки» после установки часто не помогает.\n\n"
-            f"1. Настройки → [имя] → Медиаматериалы и покупки → {masked}\n"
-            "2. iPhone онлайн (Wi‑Fi / LTE)\n"
-            "3. Удалите ярлык со старой установки и поставьте снова уже под этим ID\n"
-            "4. Откройте приложение; если спросит пароль Apple ID — введите\n"
-            "5. Если снова вылет: в App Store скачайте любое приложение этим ID, затем повторите",
+        show_fairplay_launch_checklist(
+            apple_account_email=self.config_manager.apple_account_email,
         )
 
     def _cancel_install_queue(self) -> None:
         if not self._install.is_busy:
             return
+        self._install_prepare_gen += 1
         self._install.cancel_all()
         self._toast("Отмена установки…", kind="info")
         self._log("Очередь установки: отмена")
+        self._sync_install_card()
 
     def _retry_install_queue(self) -> None:
+        if self._install.is_busy:
+            messagebox.showwarning("Установка", BUSY_OTHER_APP_MSG)
+            return
         count = self._install.retry_failed()
         if count:
             self._toast(f"Повтор: {count}", kind="info")
             self._log(f"Повтор установки: {count}")
+            self._sync_install_card()
             return
         if self._install.last_failed_app is not None:
             self._enqueue_apps([self._install.last_failed_app])
@@ -1220,11 +1196,7 @@ class RestoreIosApp(ctk.CTk):
                 devices = []
 
             def apply() -> None:
-                prev = {d.udid for d in self._devices}
-                now = {d.udid for d in devices}
                 self._remember_devices(devices)
-                if prev != now and not self._install_queue.is_busy:
-                    self._refresh_readiness()
                 # Reschedule on UI thread only (tkinter is not thread-safe).
                 self.after(8000, self._poll_usb_devices)
 
@@ -1242,14 +1214,11 @@ class RestoreIosApp(ctk.CTk):
             "Устройства в той же Wi‑Fi сети не используются — только кабель."
         )
 
-    def _confirm_device_for_install(self) -> str | None:
-        try:
-            devices = self.device_installer.list_usb_devices()
-            self._remember_devices(devices)
-        except DeviceInstallerError as exc:
-            title, message = friendly_error(exc, domain="iPhone")
-            messagebox.showerror(title, message)
-            return None
+    def _select_udid_for_install(self, devices: list[DeviceInfo]) -> str | None:
+        """UI-thread only — pick target from an already-listed USB device set.
+
+        Never calls go-ios / subprocess (those must stay off the mainloop).
+        """
         if not devices:
             messagebox.showwarning("iPhone", self._usb_not_connected_message())
             self._apply_device_ui([])
@@ -1261,45 +1230,147 @@ class RestoreIosApp(ctk.CTk):
             device = pick_usb_device(self, devices)
             if device is None:
                 return None
-            # Re-validate after picker (user might unplug while choosing).
-            try:
-                live = self.device_installer.list_usb_devices()
-            except DeviceInstallerError as exc:
-                title, message = friendly_error(exc, domain="iPhone")
-                messagebox.showerror(title, message)
-                return None
-            if not any(d.udid == device.udid for d in live):
-                messagebox.showwarning(
-                    "iPhone",
-                    "Выбранный iPhone отключён.\nПодключите его по USB и повторите.",
-                )
-                return None
-            devices = live
         self._selected_udid = device.udid
         self.settings.selected_udid = device.udid
         self._remember_devices(devices)
-        self._refresh_readiness()
+        # Use listed devices — do not re-run USB list / readiness on the UI thread.
+        self._apply_device_ui(devices)
         return device.udid
 
-    def _enqueue_apps(self, apps: list[AppEntry]) -> None:
-        self._try_init_ipatool()
-        if not self.ipatool:
+    def _abort_install_prepare(self) -> None:
+        self._install.end_preparing()
+        self._sync_install_card()
+
+    def _finish_install_prepare(
+        self,
+        apps: list[AppEntry],
+        *,
+        prepare_gen: int,
+        ipatool: IpatoolClient | None,
+        devices: list[DeviceInfo],
+        error_title: str,
+        error_msg: str,
+        email_ok: bool,
+    ) -> None:
+        """UI-thread continuation after background prepare (ipatool / USB list)."""
+        if prepare_gen != self._install_prepare_gen:
             return
-        if not self._resolve_apple_account_email():
+        if not self._install.is_preparing:
+            return
+
+        if ipatool is not None:
+            self.ipatool = ipatool
+
+        if error_title:
+            self._abort_install_prepare()
+            messagebox.showerror(error_title, error_msg)
+            return
+
+        if not email_ok or not self.ipatool:
+            self._abort_install_prepare()
             messagebox.showerror("Apple ID", "Сначала войдите в Apple ID.")
             return
-        udid = self._confirm_device_for_install()
+
+        udid = self._select_udid_for_install(devices)
         if not udid:
+            self._abort_install_prepare()
             return
+
+        # Re-check after modal USB picker — another path must not have started.
+        if self._install.queue.is_busy or self._install.queue.has_active_job:
+            self._abort_install_prepare()
+            messagebox.showwarning("Установка", BUSY_OTHER_APP_MSG)
+            return
+
         self._selected_udid = udid
-        self.after(0, self._reset_progress)
-        self.after(0, self._reset_phases)
-        self.after(0, lambda: self._set_progress("В очереди...", 0.02))
-        added = self._install.enqueue(apps, udid=udid)
+        self._reset_progress()
+        self._reset_phases()
+        self._set_progress("Подготовка...", 0.02)
+        added = self._install.try_enqueue(apps, udid=udid)
         if added == 0:
-            messagebox.showinfo("Очередь", "Эти приложения уже в очереди.")
+            self._install.end_preparing()
+            if self._install.is_busy:
+                messagebox.showwarning("Установка", BUSY_OTHER_APP_MSG)
+            else:
+                messagebox.showinfo("Очередь", "Эти приложения уже в очереди.")
         else:
-            self._log(f"В очередь добавлено: {added}")
+            # enqueue() already cleared preparing; keep active job title.
+            self._install.end_preparing(keep_active=True)
+            self._log(f"Установка начата: {apps[0].maskTitle or apps[0].title}")
+        self._sync_install_card()
+
+    def _enqueue_apps(self, apps: list[AppEntry]) -> None:
+        """Start install prepare. Returns immediately — USB/auth run off the UI thread."""
+        if not apps:
+            return
+        if self._install.is_busy:
+            messagebox.showwarning("Установка", BUSY_OTHER_APP_MSG)
+            return
+        if not self._install.begin_preparing(apps[0]):
+            messagebox.showwarning("Установка", BUSY_OTHER_APP_MSG)
+            return
+
+        self._install_prepare_gen += 1
+        prepare_gen = self._install_prepare_gen
+        apps_snapshot = list(apps)
+
+        self._reset_progress()
+        self._reset_phases()
+        self._set_progress("Подготовка...", 0.02)
+        self._sync_install_card()
+
+        def prepare_worker() -> None:
+            client: IpatoolClient | None = None
+            devices: list[DeviceInfo] = []
+            error_title = ""
+            error_msg = ""
+            email_ok = False
+            try:
+                client = self.ipatool
+                if client is None:
+                    try:
+                        client = IpatoolClient()
+                    except IpatoolError as exc:
+                        error_title, error_msg = "ipatool", str(exc)
+                        client = None
+
+                if client is not None:
+                    email = self.config_manager.apple_account_email
+                    if not email:
+                        try:
+                            info = client.auth_info()
+                            email = str(info.get("email") or info.get("appleId") or "").strip()
+                            if email and "@" in email:
+                                self.config_manager.set_apple_account(email)
+                            else:
+                                email = None
+                        except IpatoolError:
+                            email = None
+                    email_ok = bool(email)
+                    if not email_ok:
+                        error_title, error_msg = "Apple ID", "Сначала войдите в Apple ID."
+                    else:
+                        try:
+                            devices = self.device_installer.list_usb_devices()
+                        except DeviceInstallerError as exc:
+                            error_title, error_msg = friendly_error(exc, domain="iPhone")
+            except Exception as exc:  # noqa: BLE001 — surface any prepare failure on UI
+                error_title, error_msg = "Установка", str(exc)
+
+            self.after(
+                0,
+                lambda: self._finish_install_prepare(
+                    apps_snapshot,
+                    prepare_gen=prepare_gen,
+                    ipatool=client,
+                    devices=devices,
+                    error_title=error_title,
+                    error_msg=error_msg,
+                    email_ok=email_ok,
+                ),
+            )
+
+        threading.Thread(target=prepare_worker, daemon=True, name="install-prepare").start()
 
     def _create_support_report(self) -> None:
         def task() -> None:
@@ -1333,20 +1404,27 @@ class RestoreIosApp(ctk.CTk):
         threading.Thread(target=task, daemon=True).start()
 
     def _first_run_driver_nudge(self) -> None:
-        try:
-            if apple_drivers_installed():
+        def task() -> None:
+            try:
+                if apple_drivers_installed():
+                    return
+                devices = self.device_installer.list_usb_devices()
+                if devices:
+                    return
+            except Exception:
                 return
-            devices = self.device_installer.list_usb_devices()
-            if devices:
-                return
-        except Exception:
-            return
-        if messagebox.askyesno(
-            "Драйверы Apple",
-            "iPhone не обнаружен, драйверы Apple могут быть не установлены.\n\n"
-            "Установить драйверы сейчас?",
-        ):
-            self._install_drivers()
+
+            def ask() -> None:
+                if messagebox.askyesno(
+                    "Драйверы Apple",
+                    "iPhone не обнаружен, драйверы Apple могут быть не установлены.\n\n"
+                    "Установить драйверы сейчас?",
+                ):
+                    self._install_drivers()
+
+            self.after(0, ask)
+
+        threading.Thread(target=task, daemon=True, name="driver-nudge").start()
 
     def _install_drivers(self) -> None:
         if apple_drivers_installed():
@@ -1371,7 +1449,7 @@ class RestoreIosApp(ctk.CTk):
                 self.after(0, lambda m=message: self._log(m))
                 self.after(0, lambda m=message: messagebox.showerror("Драйверы", m))
 
-        self._run_async(task)
+        self._run_async(task, slot="drivers")
 
     def _reset_progress(self) -> None:
         self._stop_progress_creep()
@@ -1382,19 +1460,32 @@ class RestoreIosApp(ctk.CTk):
         self.progress_frame.grid()
         self._update_log_frame_visibility()
         self.progress_label.configure(text=text)
-        self._progress_value = max(self._progress_value, min(1.0, value))
-        animate_progress_to(self._anim, self.progress_bar, self._progress_value)
-        # Mirror into install card (stable UX).
+        new_val = max(self._progress_value, min(1.0, value))
+        delta = abs(new_val - self._progress_value)
+        self._progress_value = new_val
+        # Skip tween spam during download — direct set keeps UI responsive.
+        if delta < 0.05 or new_val >= 0.99:
+            try:
+                self.progress_bar.set(self._progress_value)
+            except tk.TclError:
+                pass
+        else:
+            animate_progress_to(self._anim, self.progress_bar, self._progress_value)
+        # Mirror into install card (stable UX) — always the active install title.
         try:
             self._install_progress_wrap.pack(fill="x", before=self._install_actions)
             self._install_progress_bar.set(self._progress_value)
             self._install_progress_pct.configure(text=f"{int(self._progress_value * 100)}%")
-            if self.selected_app:
-                name = self.selected_app.maskTitle or self.selected_app.title
+            name = self._install.installing_title(
+                (self.selected_app.maskTitle or self.selected_app.title) if self.selected_app else ""
+            )
+            if name:
                 self.selected_label.configure(text=f"Установка «{name}»…")
-                self.selected_meta_label.configure(text=text or "Идёт установка")
-        except Exception:
+            self.selected_meta_label.configure(text=text or "Идёт установка")
+        except tk.TclError:
             pass
+        except Exception:
+            logger.exception("mirror_install_progress")
 
     def _start_progress_creep(self, text: str, *, cap: float = 0.6, step: float = 0.003) -> None:
         self._stop_progress_creep()
@@ -1419,6 +1510,7 @@ class RestoreIosApp(ctk.CTk):
             self._progress_anim_id = None
 
     def _hide_progress(self) -> None:
+        self._progress_ui.reset()
         self._stop_progress_creep()
         self._progress_value = 0.0
         self.progress_bar.set(0)
@@ -1429,8 +1521,10 @@ class RestoreIosApp(ctk.CTk):
             self._install_progress_bar.set(0)
             self._install_progress_pct.configure(text="0%")
             self._install_progress_wrap.pack_forget()
-        except Exception:
+        except tk.TclError:
             pass
+        except Exception:
+            logger.exception("hide_install_progress_widgets")
 
     def _progress_callback(self) -> Callable[[float, str], None]:
         def callback(value: float, text: str) -> None:
@@ -1438,7 +1532,7 @@ class RestoreIosApp(ctk.CTk):
 
         return callback
 
-    def _collect_readiness(self) -> tuple[str, str, str]:
+    def _collect_readiness(self) -> tuple[str, str, list[DeviceInfo]]:
         driver_ok = apple_drivers_installed()
         driver_line = (
             "Драйверы Apple: установлены" if driver_ok else "Драйверы Apple: не установлены"
@@ -1446,11 +1540,7 @@ class RestoreIosApp(ctk.CTk):
         try:
             devices = self.device_installer.list_usb_devices()
             if len(devices) == 1:
-                device = devices[0]
-                device_name = device.name or "iPhone"
-                if len(device_name) > 36:
-                    device_name = device_name[:33] + "..."
-                device_line = f"USB: {device.label}"
+                device_line = f"USB: {devices[0].label}"
             elif len(devices) > 1:
                 device_line = f"USB: подключено {len(devices)} iPhone — выберите при установке"
             else:
@@ -1458,15 +1548,17 @@ class RestoreIosApp(ctk.CTk):
         except DeviceInstallerError:
             devices = []
             device_line = "USB: iPhone не найден"
-        return driver_line, device_line, f"{driver_line}\n{device_line}"
+        return driver_line, device_line, devices
 
     def _apply_device_ui(self, devices: list[DeviceInfo] | None = None) -> None:
-        """Refresh Devices card: name, status pill, connection, driver hint."""
+        """Refresh Devices card: name, status pill, connection, driver hint.
+
+        Never calls ``list_usb_devices`` — pass devices from a bg worker or use cache.
+        """
         if devices is None:
-            try:
-                devices = self.device_installer.list_usb_devices()
-            except DeviceInstallerError:
-                devices = []
+            devices = list(self._devices)
+        else:
+            self._devices = list(devices)
 
         driver_ok = apple_drivers_installed()
         driver_hint = (
@@ -1522,17 +1614,56 @@ class RestoreIosApp(ctk.CTk):
                     text=f"{driver_hint}\nПодключите iPhone кабелем USB"
                 )
 
-    def _refresh_readiness(self, *, log: bool = False) -> None:
-        driver_line, device_line, combined = self._collect_readiness()
-        try:
-            devices = self.device_installer.list_usb_devices()
-        except DeviceInstallerError:
-            devices = []
-        self._apply_device_ui(devices)
-        if log:
-            self._log("--- Проверка системы ---")
-            self._log(driver_line)
-            self._log(device_line)
+    def _refresh_readiness(
+        self,
+        *,
+        log: bool = False,
+        devices: list[DeviceInfo] | None = None,
+    ) -> None:
+        """Apply readiness UI. USB list runs off the UI thread unless ``devices`` given."""
+        if devices is not None:
+            self._apply_device_ui(devices)
+            if log:
+                self._log_readiness(devices)
+            return
+
+        self._usb_refresh_gen += 1
+        gen = self._usb_refresh_gen
+
+        def task() -> None:
+            try:
+                found = self.device_installer.list_usb_devices()
+            except DeviceInstallerError:
+                found = []
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda e=exc: self._log_exception("refresh_readiness", e))
+                found = []
+
+            def apply() -> None:
+                if gen != self._usb_refresh_gen:
+                    return
+                self._apply_device_ui(found)
+                if log:
+                    self._log_readiness(found)
+
+            self.after(0, apply)
+
+        threading.Thread(target=task, daemon=True, name="usb-refresh").start()
+
+    def _log_readiness(self, devices: list[DeviceInfo]) -> None:
+        driver_ok = apple_drivers_installed()
+        driver_line = (
+            "Драйверы Apple: установлены" if driver_ok else "Драйверы Apple: не установлены"
+        )
+        if len(devices) == 1:
+            device_line = f"USB: {devices[0].label}"
+        elif len(devices) > 1:
+            device_line = f"USB: подключено {len(devices)} iPhone — выберите при установке"
+        else:
+            device_line = "USB: iPhone не найден"
+        self._log("--- Проверка системы ---")
+        self._log(driver_line)
+        self._log(device_line)
 
     def _warm_icon_cache(self) -> None:
         """Warm PIL disk cache for Popular only — never create CTkImage off UI thread."""
@@ -1582,17 +1713,12 @@ class RestoreIosApp(ctk.CTk):
                         ),
                     )
 
-            driver_line, device_line, _combined = self._collect_readiness()
-            self.after(0, self._refresh_readiness)
+            driver_line, device_line, devices = self._collect_readiness()
+            # Apply UI with devices already listed in bg — do NOT re-list on Tk thread.
+            self.after(0, lambda d=devices: self._refresh_readiness(devices=d))
             self.after(0, lambda: self._log("--- Проверка при запуске ---"))
             self.after(0, lambda: self._log(driver_line))
             self.after(0, lambda: self._log(device_line))
-
-            try:
-                devices = self.device_installer.list_usb_devices()
-                self.after(0, lambda d=devices: self._remember_devices(d))
-            except Exception as exc:
-                self.after(0, lambda e=exc: self._log_exception("startup_list_usb", e))
 
             self._try_init_ipatool(show_errors=False)
             if not self.ipatool:
@@ -1604,12 +1730,12 @@ class RestoreIosApp(ctk.CTk):
                 info = self.ipatool.auth_info()
                 email = info.get("email") or info.get("appleId") or "выполнен вход"
                 if isinstance(email, str) and "@" in email:
-                    self.config_manager.set_apple_account(email)
+                    self.after(0, lambda e=email: self.config_manager.set_apple_account(e))
                 masked = mask_email(str(email)) if isinstance(email, str) else "…"
                 self.after(0, lambda m=masked: self.auth_status_label.configure(text=f"Авторизован\n{m}"))
                 self.after(0, lambda m=masked: self._log(f"Apple ID: {m}"))
             except IpatoolError:
-                self.config_manager.set_apple_account(None)
+                self.after(0, lambda: self.config_manager.set_apple_account(None))
                 self.after(0, lambda: self.auth_status_label.configure(text="Не авторизован"))
                 self.after(0, lambda: self._log("Apple ID: не авторизован"))
 
@@ -1695,12 +1821,10 @@ class RestoreIosApp(ctk.CTk):
 
         if busy:
             self._install_card_state = "installing"
-            name = ""
+            fallback = ""
             if self.selected_app:
-                name = self.selected_app.maskTitle or self.selected_app.title
-            elif self._install.current:
-                app = self._install.current.app
-                name = app.maskTitle or app.title
+                fallback = self.selected_app.maskTitle or self.selected_app.title
+            name = self._install.installing_title(fallback)
             self.selected_label.configure(text=f"Установка «{name or 'приложения'}»…")
             phase = str(self.progress_label.cget("text") or "").strip()
             self.selected_meta_label.configure(text=phase or "Идёт установка на iPhone")
@@ -1709,7 +1833,31 @@ class RestoreIosApp(ctk.CTk):
             except tk.TclError:
                 self._install_progress_wrap.pack(fill="x")
             self._cancel_install_btn.pack(side="left")
-            self.install_button.configure(state="disabled")
+            # Another app selected mid-install: Install stays clickable → exact busy message.
+            other = (
+                self.selected_app is not None
+                and bool(self._install.active_app_id)
+                and self.selected_app.id != self._install.active_app_id
+            )
+            if other:
+                self.install_button.configure(
+                    text="Установить приложение",
+                    command=self._install_selected,
+                    state="normal",
+                )
+                self.install_button.pack(side="left", padx=(8, 0))
+                try:
+                    self.selected_meta_label.configure(
+                        text="Сейчас ставится другое приложение — «Отмена» или дождитесь"
+                    )
+                except tk.TclError:
+                    pass
+            else:
+                self.install_button.configure(
+                    text="Установить приложение",
+                    command=self._install_selected,
+                    state="disabled",
+                )
             self._paint_install_card()
             return
 
@@ -1724,7 +1872,10 @@ class RestoreIosApp(ctk.CTk):
             title = app.maskTitle or app.title
             self.selected_label.configure(text=title)
             self.selected_meta_label.configure(text="Не удалось установить — можно повторить")
-            icon = self.icon_loader.get_app_icon(app, size=ICON_INSTALL)
+            icon = (
+                self.icon_loader.peek_app_icon(app, size=ICON_INSTALL)
+                or self.icon_loader.placeholder_app_icon(size=ICON_INSTALL)
+            )
             self._selected_icon_ref = icon
             self.selected_icon_label.configure(image=icon)
             self._retry_install_btn.pack(side="left")
@@ -1817,19 +1968,17 @@ class RestoreIosApp(ctk.CTk):
         except tk.TclError:
             pass
 
-    def _update_selection_bar(self) -> None:
-        # Card is always visible — state is driven by _sync_install_card.
-        self._sync_install_card()
-
-    def _update_install_button_state(self) -> None:
-        self._sync_install_card()
-
     def _set_busy(self, busy: bool) -> None:
         self._async_busy = busy
         self._sync_install_card()
 
-    def _run_async(self, task: Callable[[], None]) -> None:
-        if self._worker and self._worker.is_alive():
+    def _run_async(self, task: Callable[[], None], *, slot: str = "default") -> None:
+        """Run a background job. Named slots allow auth/update/drivers in parallel."""
+        existing = self._async_jobs.get(slot)
+        if existing is not None and existing.is_alive():
+            messagebox.showwarning("Подождите", "Операция уже выполняется.")
+            return
+        if slot == "default" and self._worker and self._worker.is_alive():
             messagebox.showwarning("Подождите", "Операция уже выполняется.")
             return
 
@@ -1841,8 +1990,11 @@ class RestoreIosApp(ctk.CTk):
                 self.after(0, lambda: self._set_busy(False))
                 self.after(0, self._hide_progress)
 
-        self._worker = threading.Thread(target=runner, daemon=True)
-        self._worker.start()
+        thread = threading.Thread(target=runner, daemon=True, name=f"async-{slot}")
+        self._async_jobs[slot] = thread
+        if slot == "default":
+            self._worker = thread
+        thread.start()
 
     def _try_init_ipatool(self, show_errors: bool = True) -> None:
         try:
@@ -1902,7 +2054,7 @@ class RestoreIosApp(ctk.CTk):
 
                 self.after(0, fail)
 
-        self._run_async(task)
+        self._run_async(task, slot="auth")
 
     def _login_dialog(self) -> None:
         self._try_init_ipatool()
@@ -1950,7 +2102,7 @@ class RestoreIosApp(ctk.CTk):
                 self.after(0, lambda m=message: self._log(m))
                 self.after(0, lambda m=message: messagebox.showerror("Выход", m))
 
-        self._run_async(task)
+        self._run_async(task, slot="auth")
 
     def _show_update_action_dialog(
         self,
@@ -1963,83 +2115,17 @@ class RestoreIosApp(ctk.CTk):
         on_secondary: Callable[[], None] | None = None,
         tertiary_text: str = "Закрыть",
     ) -> None:
-        dialog = ctk.CTkToplevel(self)
-        dialog.title(title)
-        dialog.geometry("520x400")
-        dialog.minsize(460, 300)
-        dialog.resizable(False, True)
-        dialog.transient(self)
-        dialog.grab_set()
-        dialog.configure(fg_color=THEME["bg"])
-        dialog.after(50, lambda: apply_glass_window(dialog, dark=True))
-        fade_in_window(dialog)
-
-        card = glass_frame(dialog, elevated=True)
-        card.pack(fill="both", expand=True, padx=20, pady=20)
-
-        ctk.CTkLabel(
-            card,
-            text=title,
-            font=ui_font(18, weight="bold"),
-            text_color=THEME["text"],
-            anchor="w",
-        ).pack(anchor="w", padx=18, pady=(16, 8))
-
-        body = ctk.CTkScrollableFrame(
-            card,
-            fg_color=THEME["bg_soft"],
-            corner_radius=12,
-            scrollbar_button_color=THEME["chip"],
-            scrollbar_button_hover_color=THEME["glass_hover"],
+        show_update_action_dialog(
+            self,
+            self._anim,
+            title=title,
+            message=message,
+            primary_text=primary_text,
+            on_primary=on_primary,
+            secondary_text=secondary_text,
+            on_secondary=on_secondary,
+            tertiary_text=tertiary_text,
         )
-        body.pack(fill="both", expand=True, padx=14, pady=(0, 4))
-
-        ctk.CTkLabel(
-            body,
-            text=sanitize_update_message(message),
-            font=ui_font(13),
-            text_color=THEME["text_secondary"],
-            justify="left",
-            anchor="nw",
-            wraplength=430,
-        ).pack(anchor="w", fill="x", padx=10, pady=(8, 10))
-
-        buttons = ctk.CTkFrame(card, fg_color="transparent")
-        buttons.pack(fill="x", padx=14, pady=(8, 16))
-
-        def close_then(action: Callable[[], None] | None) -> None:
-            dialog.destroy()
-            if action:
-                action()
-
-        primary_btn = primary_button(
-            buttons,
-            text=primary_text,
-            command=lambda: close_then(on_primary),
-            width=160,
-            height=40,
-        )
-        primary_btn.pack(side="right")
-        bind_press_feedback(self._anim, primary_btn)
-
-        if secondary_text:
-            secondary_button(
-                buttons,
-                text=secondary_text,
-                command=lambda: close_then(on_secondary),
-                width=140 if len(secondary_text) <= 14 else 180,
-                height=40,
-                font=ui_font(12),
-            ).pack(side="right", padx=(0, 8))
-
-        if tertiary_text:
-            secondary_button(
-                buttons,
-                text=tertiary_text,
-                command=dialog.destroy,
-                width=100,
-                height=40,
-            ).pack(side="left")
 
     def _launch_verified_setup(self, installer: Path) -> None:
         """Start silent Inno Setup after SHA256 + Authenticode checks, then quit."""
@@ -2361,7 +2447,7 @@ class RestoreIosApp(ctk.CTk):
             self.after(0, lambda: self._log(f"Доступна версия {result.latest_version}."))
             self.after(0, lambda: self._present_update_available(result))
 
-        self._run_async(task)
+        self._run_async(task, slot="update")
 
     def _load_catalog_state(self) -> dict[str, str]:
         if not self._catalog_state_path.exists():
@@ -2398,33 +2484,24 @@ class RestoreIosApp(ctk.CTk):
         tab = state.get("tab", "popular")
         if tab_by_id(self.catalog.tabs, tab) is None:
             tab = self.catalog.tabs[0].id
-        self._catalog_tab = tab
         self.catalog.set_tab(tab)
-        self._catalog_view = "root"
-        self._catalog_bank_group = None
 
     def _on_catalog_tab(self, label: str) -> None:
         found = tab_by_label(self.catalog.tabs, label)
         key = found.id if found else "popular"
         if (
-            key == self._catalog_tab
-            and self._catalog_view == "root"
-            and not self._global_search_query
+            key == self.catalog.state.tab_id
+            and self.catalog.state.view == "root"
+            and not self.catalog.state.search_query
         ):
             return
-        self._catalog_tab = key
         self.catalog.set_tab(key)
-        self._catalog_view = "root"
-        self._catalog_bank_group = None
         self._save_catalog_state()
         self._refresh_app_list()
 
     def _catalog_back(self) -> None:
-        if self._catalog_view != "bank":
+        if self.catalog.state.view != "bank":
             return
-        self._catalog_view = "root"
-        self._catalog_bank_group = None
-        self._catalog_tab = "banks"
         self.catalog.set_tab("banks")
         banks = tab_by_id(self.catalog.tabs, "banks")
         if self._catalog_tabs is not None and banks is not None:
@@ -2435,8 +2512,7 @@ class RestoreIosApp(ctk.CTk):
         self._refresh_app_list()
 
     def _open_root_catalog(self) -> None:
-        self._catalog_view = "root"
-        self._catalog_bank_group = None
+        self.catalog.set_view("root")
         self._bank_search_query = ""
         self.bank_search_var.set("")
         if self.selected_app and self.selected_app.is_banking:
@@ -2445,10 +2521,7 @@ class RestoreIosApp(ctk.CTk):
         self._refresh_app_list()
 
     def _open_banks_folder(self) -> None:
-        self._catalog_tab = "banks"
         self.catalog.set_tab("banks")
-        self._catalog_view = "root"
-        self._catalog_bank_group = None
         banks = tab_by_id(self.catalog.tabs, "banks")
         if self._catalog_tabs is not None and banks is not None:
             self._catalog_tabs.set(banks.title)
@@ -2460,9 +2533,7 @@ class RestoreIosApp(ctk.CTk):
     def _open_bank_group(self, bank_group_id: str) -> None:
         if not self.config_manager.get_bank_group(bank_group_id):
             return
-        self._catalog_tab = "banks"
-        self._catalog_view = "bank"
-        self._catalog_bank_group = bank_group_id
+        self.catalog.set_bank_group(bank_group_id)
         self._bank_search_query = ""
         self.bank_search_var.set("")
         self._save_catalog_state()
@@ -2473,7 +2544,6 @@ class RestoreIosApp(ctk.CTk):
         if query == self._bank_search_query:
             return
         self._bank_search_query = query
-        self._global_search_query = query
         self.catalog.set_search(query, scope="section")
         self._refresh_app_list()
 
@@ -2600,8 +2670,10 @@ class RestoreIosApp(ctk.CTk):
             try:
                 if card.winfo_exists():
                     card.icon_label.configure(image=photo)  # type: ignore[attr-defined]
-            except Exception:
+            except tk.TclError:
                 pass
+            except Exception:
+                logger.exception("async app icon apply")
 
         self.icon_loader.schedule_app_icon(
             app,
@@ -2676,7 +2748,8 @@ class RestoreIosApp(ctk.CTk):
             self._evict_search_panels()
 
         # Cap cached panels to avoid unbounded widget growth.
-        while len(self._catalog_panels) >= 8:
+        # Cap cached tab panels (foundation for large catalogs — free Tk widgets sooner).
+        while len(self._catalog_panels) >= 5:
             oldest = next(iter(self._catalog_panels))
             self._destroy_catalog_panel(oldest)
 
@@ -3144,7 +3217,10 @@ class RestoreIosApp(ctk.CTk):
             app = self.config_manager.get_app(option.app_id)
             if app is None:
                 continue
-            icon = self.icon_loader.get_app_icon(app, size=40)
+            icon = (
+                self.icon_loader.peek_app_icon(app, size=40)
+                or self.icon_loader.placeholder_app_icon(size=40)
+            )
             options.append(
                 VersionPickerOption(
                     label=option.label,
@@ -3196,16 +3272,46 @@ class RestoreIosApp(ctk.CTk):
             )
 
     def _select_app(self, app: AppEntry) -> None:
+        """Allow selection anytime; never auto-starts install. Mid-install card stays on active job."""
         self.selected_app = app
-        self._install.clear_success()
-        if self._install.last_failed_app and self._install.last_failed_app.id != app.id:
-            self._install.clear_failure()
+        if not self._install.is_busy:
+            self._install.clear_success()
+            if self._install.last_failed_app and self._install.last_failed_app.id != app.id:
+                self._install.clear_failure()
 
-        icon = self.icon_loader.get_app_icon(app, size=ICON_INSTALL)
+        self._selected_icon_token += 1
+        icon_token = self._selected_icon_token
+        # Peek cache or show placeholder — never sync disk/PIL on select (avoids microfreeze).
+        icon = self.icon_loader.peek_app_icon(app, size=ICON_INSTALL)
+        if icon is None:
+            icon = self.icon_loader.placeholder_app_icon(size=ICON_INSTALL)
+
+            def on_ready(photo: ctk.CTkImage) -> None:
+                if icon_token != self._selected_icon_token:
+                    return
+                if self.selected_app is None or self.selected_app.id != app.id:
+                    return
+                self._selected_icon_ref = photo
+                if photo not in self._icon_refs:
+                    self._icon_refs.append(photo)
+                if not self._install.is_busy:
+                    try:
+                        self.selected_icon_label.configure(image=photo)
+                    except tk.TclError:
+                        pass
+
+            self.icon_loader.schedule_app_icon(
+                app,
+                size=ICON_INSTALL,
+                on_ready=on_ready,
+                schedule=self._schedule_ui,
+            )
         self._selected_icon_ref = icon
         if icon not in self._icon_refs:
             self._icon_refs.append(icon)
-        self.selected_icon_label.configure(image=icon)
+        # Keep install-card icon on the active job while busy.
+        if not self._install.is_busy:
+            self.selected_icon_label.configure(image=icon)
 
         self._highlight_card(app.id)
         self._sync_install_card()
@@ -3257,7 +3363,7 @@ class RestoreIosApp(ctk.CTk):
 
                 def fail() -> None:
                     self._log(message)
-                    self._refresh_readiness()
+                    self._refresh_readiness(devices=[])
                     messagebox.showerror(title, message)
 
                 self.after(0, fail)
@@ -3266,7 +3372,7 @@ class RestoreIosApp(ctk.CTk):
 
                 def fail_unknown() -> None:
                     self._log(message)
-                    self._refresh_readiness()
+                    self._refresh_readiness(devices=[])
                     messagebox.showerror("iPhone", message)
 
                 self.after(0, fail_unknown)
@@ -3276,6 +3382,13 @@ class RestoreIosApp(ctk.CTk):
     def _install_selected(self) -> None:
         if not self.selected_app:
             messagebox.showinfo("Установка", "Сначала выберите приложение из списка.")
+            return
+        if self._install.is_busy:
+            active_id = self._install.active_app_id
+            # Same app + busy: ignore duplicate click. Other app: exact warning.
+            if not active_id or self.selected_app.id != active_id:
+                self._toast(BUSY_OTHER_APP_MSG, kind="warning")
+                messagebox.showwarning("Установка", BUSY_OTHER_APP_MSG)
             return
         self._enqueue_apps([self.selected_app])
 
