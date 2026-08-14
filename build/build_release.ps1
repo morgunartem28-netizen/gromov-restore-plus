@@ -278,7 +278,7 @@ if ($iscc) {
                 "https://ghfast.top/$setupUrl"
             )
             sha256     = $sha
-            notes      = "Одна установка за раз, без зависаний USB и «Установить», исправлена отмена и прогресс, быстрее иконки."
+            notes      = "Добавлены Яндекс Пэй, Wildberries и Ozon."
         }
         $manifestPath = Join-Path $root "release\version.json"
         $json = ($manifest | ConvertTo-Json -Depth 5)

@@ -31,7 +31,7 @@
       "description": "Объявления и магазины",
       "icon": "shop",
       "order": 3,
-      "match": {"appIds": ["avito", "avito-new"]}
+      "match": {"appIds": ["avito", "avito-new", "wildberries", "ozon"]}
     }
   ],
   "bankGroups": [
@@ -49,6 +49,9 @@
     "max",
     "vk",
     "@version:avito",
+    "wildberries",
+    "ozon",
+    "yandex-pay",
     "@bank:sber",
     "sber-kids",
     "@bank:vtb",
@@ -91,6 +94,14 @@
     "почта": ["mail.ru", "mailru"],
     "облако": ["mail.ru", "mailru-cloud", "cloud", "cloud mail"],
     "cloud": ["облако", "mailru-cloud", "cloud mail"],
-    "mailru cloud": ["облако", "mailru-cloud"]
+    "mailru cloud": ["облако", "mailru-cloud"],
+    "wb": ["wildberries", "вайлдберриз", "вб"],
+    "вб": ["wildberries", "вайлдберриз", "wb"],
+    "вайлдберриз": ["wildberries", "wb", "вб"],
+    "озон": ["ozon"],
+    "ozon": ["озон"],
+    "яндекс пей": ["yandex-pay", "яндекс пэй", "пей"],
+    "яндекс пэй": ["yandex-pay", "яндекс пей", "пей"],
+    "пей": ["яндекс пэй", "yandex-pay"]
   }
 }

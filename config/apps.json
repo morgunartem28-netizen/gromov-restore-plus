@@ -95,6 +95,39 @@
       "iconUrl": "",
       "iconFile": "vk-music.png",
       "aliases": ["вк музыка", "vk music"]
+    },
+    {
+      "id": "yandex-pay",
+      "title": "Яндекс Пэй",
+      "bundleId": "ru.yandex.pay",
+      "appId": 1634422317,
+      "description": "Яндекс Пэй — оплата и сервисы Яндекса",
+      "iconUrl": "",
+      "iconFile": "yandex-pay.png",
+      "aliases": ["яндекс пей", "yandex pay", "пей", "pay"],
+      "addedAt": "2026-08-14"
+    },
+    {
+      "id": "wildberries",
+      "title": "Wildberries",
+      "bundleId": "RU.WILDBERRIES.MOBILEAPP",
+      "appId": 597880187,
+      "description": "Официальное приложение Wildberries",
+      "iconUrl": "",
+      "iconFile": "wildberries.png",
+      "aliases": ["вайлдберриз", "вайлдбериз", "wb", "вб"],
+      "addedAt": "2026-08-14"
+    },
+    {
+      "id": "ozon",
+      "title": "Ozon",
+      "bundleId": "ru.ozon.OzonStore",
+      "appId": 407804998,
+      "description": "Официальное приложение Ozon",
+      "iconUrl": "",
+      "iconFile": "ozon.png",
+      "aliases": ["озон", "ozon store"],
+      "addedAt": "2026-08-14"
     }
   ]
 }

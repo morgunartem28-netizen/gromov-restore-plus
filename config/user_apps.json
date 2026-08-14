@@ -37,6 +37,36 @@
       "iconUrl": "",
       "iconFile": "mailru-cloud.png",
       "addedAt": "2026-08-04"
+    },
+    {
+      "id": "yandex-pay",
+      "title": "Яндекс Пэй",
+      "bundleId": "ru.yandex.pay",
+      "appId": 1634422317,
+      "description": "Яндекс Пэй — оплата и сервисы Яндекса.",
+      "iconUrl": "",
+      "iconFile": "yandex-pay.png",
+      "addedAt": "2026-08-14"
+    },
+    {
+      "id": "wildberries",
+      "title": "Wildberries",
+      "bundleId": "RU.WILDBERRIES.MOBILEAPP",
+      "appId": 597880187,
+      "description": "Официальное приложение Wildberries.",
+      "iconUrl": "",
+      "iconFile": "wildberries.png",
+      "addedAt": "2026-08-14"
+    },
+    {
+      "id": "ozon",
+      "title": "Ozon",
+      "bundleId": "ru.ozon.OzonStore",
+      "appId": 407804998,
+      "description": "Официальное приложение Ozon.",
+      "iconUrl": "",
+      "iconFile": "ozon.png",
+      "addedAt": "2026-08-14"
     }
   ]
 }
