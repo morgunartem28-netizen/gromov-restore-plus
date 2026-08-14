@@ -1,13 +1,13 @@
 {
-  "version": "1.4.3",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.3/GROMOV-RestorePlus-Setup.exe",
+  "version": "1.4.4",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
   "setup_urls": [
-    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.3/GROMOV-RestorePlus-Setup.exe",
-    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.3/GROMOV-RestorePlus-Setup.exe",
-    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.3/GROMOV-RestorePlus-Setup.exe",
-    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.3/GROMOV-RestorePlus-Setup.exe",
-    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.3/GROMOV-RestorePlus-Setup.exe"
+    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
+    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
+    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
+    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
+    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe"
   ],
-  "sha256": "a872516ce78869d7b6759c102028c245afa4e6d1af67085b8a9da2ab87b1b074",
-  "notes": "Одна установка за раз, без зависаний USB и «Установить», исправлена отмена и прогресс, быстрее иконки."
+  "sha256": "240aa79b0af6b172ac8eba5033a0fee33d2e1dca7a9ff61417df77ecf8106f6d",
+  "notes": "Добавлены Яндекс Пэй, Wildberries и Ozon."
 }

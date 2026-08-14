@@ -1,6 +1,6 @@
 {
     "ipatool.exe":  {
-                        "sha256":  "745c56fdcfc53ea3ad950a9786d2dde2b62ab30192721b29ea5bf480a2e53092",
+                        "sha256":  "653f69287d0ec8e33ecf1f83694527f1822fce53d11de9a64d19b42a6893ccde",
                         "note":  "Patched local build: secrets via IPATOOL_PASSWORD / IPATOOL_KEYCHAIN_PASSPHRASE env (no argv)"
                     },
     "ios.exe":  {
