@@ -29,7 +29,7 @@ class AppleLoginDialog(ctk.CTkToplevel):
         self._anim = AnimationRunner(self)
 
         self.title("Вход в Apple ID — GROMOV Restore+")
-        self.geometry("500x560")
+        self.geometry("500x600")
         self.minsize(460, 420)
         self.resizable(False, True)
         self.transient(parent)
@@ -110,7 +110,7 @@ class AppleLoginDialog(ctk.CTkToplevel):
 
         self.code_entry = ctk.CTkEntry(
             body,
-            placeholder_text="Появится после первого «Войти»",
+            placeholder_text="6 цифр с iPhone — «Получить код проверки»",
             height=40,
             corner_radius=12,
             fg_color=THEME["input"],
@@ -122,9 +122,11 @@ class AppleLoginDialog(ctk.CTkToplevel):
 
         self.hint_label = ctk.CTkLabel(
             body,
-            text="Введите email и пароль → «Войти». Если нужен код — он придёт на "
-            "доверенный iPhone/Mac (или Настройки → Apple ID → Получить код). "
-            "При опечатке в пароле код не приходит. Введите 6 цифр сразу и снова «Войти».",
+            text="Apple сам код в GROMOV не присылает (ни SMS, ни часто даже push).\n"
+            "1. На iPhone: Настройки → [имя] → Вход и безопасность → Получить код проверки\n"
+            "2. Введите email, пароль и эти 6 цифр\n"
+            "3. Сразу нажмите «Войти» — код живёт около 30 секунд.\n"
+            "При опечатке в пароле код бесполезен: сначала проверьте пароль.",
             wraplength=420,
             justify="left",
             text_color=THEME["muted"],

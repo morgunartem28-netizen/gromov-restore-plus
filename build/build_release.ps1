@@ -278,7 +278,7 @@ if ($iscc) {
                 "https://ghfast.top/$setupUrl"
             )
             sha256     = $sha
-            notes      = "Добавлены Яндекс Пэй, Wildberries и Ozon."
+            notes      = "Вход в Apple ID: код берётся на iPhone («Получить код проверки»), без ожидания SMS/push."
         }
         $manifestPath = Join-Path $root "release\version.json"
         $json = ($manifest | ConvertTo-Json -Depth 5)

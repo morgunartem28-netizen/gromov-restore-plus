@@ -38,15 +38,16 @@ def friendly_error(exc: BaseException | str, *, domain: str = "Общая") -> t
         if "2fa code is required" in lower or "auth code is required" in lower:
             return (
                 "Apple ID",
-                "Нужен код подтверждения.\n"
-                "Если push не пришёл — проверьте email/пароль, либо возьмите код "
-                "в Настройки → Apple ID → Получить код проверки.",
+                "Нужен код с iPhone, не из SMS.\n"
+                "Настройки → Apple ID → Вход и безопасность → Получить код проверки.\n"
+                "Введите 6 цифр вместе с паролем и сразу нажмите «Войти».",
             )
         if "hex digit" in lower or "unmarshal xml" in lower:
             return (
                 "Apple ID",
-                "Apple отклонил вход до отправки кода 2FA.\n"
-                "Подождите несколько минут и повторите попытку.",
+                "Apple отклонил служебный запрос — уведомление с кодом не уходит.\n"
+                "Отключите VPN, подождите пару минут.\n"
+                "Код возьмите на iPhone: Настройки → Apple ID → Получить код проверки.",
             )
         if "password" in lower or "badlogin" in lower or "incorrect" in lower:
             return "Apple ID", "Неверный email или пароль Apple ID."
