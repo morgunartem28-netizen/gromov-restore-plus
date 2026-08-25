@@ -1,13 +1,13 @@
 {
-  "version": "1.4.4",
-  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
+  "version": "1.4.5",
+  "setup_url": "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.5/GROMOV-RestorePlus-Setup.exe",
   "setup_urls": [
-    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
-    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
-    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
-    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe",
-    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.4/GROMOV-RestorePlus-Setup.exe"
+    "https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.5/GROMOV-RestorePlus-Setup.exe",
+    "https://gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.5/GROMOV-RestorePlus-Setup.exe",
+    "https://edgeone.gh-proxy.com/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.5/GROMOV-RestorePlus-Setup.exe",
+    "https://ghproxy.net/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.5/GROMOV-RestorePlus-Setup.exe",
+    "https://ghfast.top/https://github.com/morgunartem28-netizen/gromov-restore-plus/releases/download/1.4.5/GROMOV-RestorePlus-Setup.exe"
   ],
-  "sha256": "240aa79b0af6b172ac8eba5033a0fee33d2e1dca7a9ff61417df77ecf8106f6d",
-  "notes": "Добавлены Яндекс Пэй, Wildberries и Ozon."
+  "sha256": "7ba90e5f40e81e176ab2276dcbd93e5d3f37204dce0ec29194592b3fbf5dd8ac",
+  "notes": "Вход в Apple ID: код берётся на iPhone («Получить код проверки»), без ожидания SMS/push."
 }
